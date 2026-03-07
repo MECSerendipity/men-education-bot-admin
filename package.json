@@ -1,0 +1,23 @@
+{
+  "name": "men-education-telegram-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -n bot,api,web -c cyan,blue,green \"npm run dev:bot\" \"npm run dev:admin\"",
+    "dev:bot": "tsx watch src/main.ts",
+    "dev:admin": "npm run dev --prefix admin",
+    "build": "tsc",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "dotenv": "^17.3.1",
+    "telegraf": "^4.16.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.5",
+    "concurrently": "^9.2.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
