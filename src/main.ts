@@ -22,7 +22,13 @@ if (!process.env.DATABASE_URL) {
 const missingWfp = ['WAYFORPAY_MERCHANT_ACCOUNT', 'WAYFORPAY_SECRET_KEY', 'WAYFORPAY_MERCHANT_DOMAIN', 'WEBHOOK_BASE_URL']
   .filter((key) => !process.env[key]);
 if (missingWfp.length > 0) {
-  logger.warn(`Missing WayForPay env vars: ${missingWfp.join(', ')} — payments will not work`);
+  logger.warn(`Missing WayForPay env vars: ${missingWfp.join(', ')} — card payments will not work`);
+}
+
+const missingUsdt = ['USDT_WALLET_ADDRESS', 'USDT_ADMIN_CHANNEL_ID']
+  .filter((key) => !process.env[key]);
+if (missingUsdt.length > 0) {
+  logger.warn(`Missing USDT env vars: ${missingUsdt.join(', ')} — USDT payments will not work`);
 }
 
 /* ---------- Launch ---------- */

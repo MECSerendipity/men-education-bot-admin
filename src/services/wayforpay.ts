@@ -25,6 +25,9 @@ export const PLANS: Record<string, { amount: number; currency: string; months: n
   card_1m:  { amount: 790,  currency: 'UAH', months: 1,  label: 'Підписка ME Club — 1 місяць' },
   card_6m:  { amount: 3850, currency: 'UAH', months: 6,  label: 'Підписка ME Club — 6 місяців' },
   card_12m: { amount: 6500, currency: 'UAH', months: 12, label: 'Підписка ME Club — 12 місяців' },
+  usdt_1m:  { amount: 18,   currency: 'USDT', months: 1,  label: 'Підписка ME Club — 1 місяць' },
+  usdt_6m:  { amount: 90,   currency: 'USDT', months: 6,  label: 'Підписка ME Club — 6 місяців' },
+  usdt_12m: { amount: 150,  currency: 'USDT', months: 12, label: 'Підписка ME Club — 12 місяців' },
 };
 
 /** Generate HMAC-MD5 signature for WayForPay */
