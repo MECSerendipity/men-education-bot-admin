@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { createBot } from './bot.js';
+import { migrate } from './db/migrate.js';
 
 /* ---------- Config validation ---------- */
 
@@ -12,13 +13,21 @@ if (!BOT_TOKEN) {
 
 /* ---------- Launch ---------- */
 
-const bot = createBot(BOT_TOKEN);
+async function start() {
+  await migrate();
 
-bot.launch(() => {
-  console.log('🤖 Bot started successfully!');
+  const bot = createBot(BOT_TOKEN!);
+
+  bot.launch(() => {
+    console.log('🤖 Bot started successfully!');
+  });
+
+  process.once('SIGINT', () => bot.stop('SIGINT'));
+  process.once('SIGTERM', () => bot.stop('SIGTERM'));
+}
+
+start().catch((err) => {
+  console.error('❌ Failed to start:', err);
+  process.exit(1);
 });
 
-/* ---------- Graceful shutdown ---------- */
-
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
