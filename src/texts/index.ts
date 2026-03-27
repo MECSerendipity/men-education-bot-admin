@@ -29,6 +29,7 @@ export type TextKey =
   | 'BTN_USDT_6M'
   | 'BTN_USDT_12M'
   | 'BTN_USDT_PAID'
+  | 'BTN_USDT_CANCEL'
   | 'BTN_CHANGE_PAYMENT'
   | 'BTN_HOME'
   | 'BTN_BACK'

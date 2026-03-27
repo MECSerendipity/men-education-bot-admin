@@ -90,15 +90,14 @@ async function handleUsdtTariffClick(ctx: Context, planKey: string): Promise<voi
       createdAt: Date.now(),
     });
 
-    // Show order details
+    // Show order details (without order reference — internal only)
     await ctx.reply(
-      `Номер замовлення:\n<code>${escapeHtml(orderReference)}</code>\n\n` +
       `📦 ${escapeHtml(plan.label)}\n` +
       `💰 Сума: ${plan.amount} USDT`,
       { parse_mode: 'HTML' },
     );
 
-    // Show wallet address (copyable)
+    // Show wallet address (copyable via <code> tag)
     await ctx.reply('Надішли USDT у мережі TRC-20 на адресу:');
     await ctx.reply(`<code>${escapeHtml(walletAddress)}</code>`, { parse_mode: 'HTML' });
 
@@ -162,8 +161,36 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
       return;
     }
 
-    // Ask for transaction hash
-    await ctx.reply('Відправ будь ласка Transaction ID (хеш)');
+    // Ask for transaction hash + show cancel button
+    await ctx.reply('Відправ будь ласка Transaction ID (хеш) 👇', {
+      reply_markup: {
+        keyboard: [
+          [{ text: TEXTS.BTN_USDT_CANCEL }],
+          [{ text: TEXTS.BTN_HOME }],
+        ],
+        resize_keyboard: true,
+      },
+    });
+  });
+
+  // "❌ Скасувати оплату" button
+  bot.hears(TEXTS.BTN_USDT_CANCEL, async (ctx) => {
+    const telegramId = ctx.from.id;
+    const state = waitingForHash.get(telegramId);
+
+    if (state) {
+      waitingForHash.delete(telegramId);
+      await updatePaymentStatus(state.orderReference, 'cancelled');
+    }
+
+    await ctx.reply('Оплату скасовано. Ти можеш обрати тариф знову.', {
+      reply_markup: {
+        keyboard: [
+          [{ text: TEXTS.BTN_HOME }],
+        ],
+        resize_keyboard: true,
+      },
+    });
   });
 
   // Handle text messages — check if user is sending a transaction hash
@@ -183,7 +210,7 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
       return next();
     }
 
-    // Save hash and send to admin channel
+    // Clear waiting state
     waitingForHash.delete(telegramId);
 
     const plan = PLANS[state.planKey];
@@ -195,19 +222,26 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
       return;
     }
 
-    // Update payment with hash info
+    // Update payment status
     await updatePaymentStatus(state.orderReference, 'waiting_confirmation');
 
-    // Tell user we're verifying
-    await ctx.reply('USDT транзакція перевіряється, я повідомлю про результат 🔄');
+    // Tell user we're sending for verification
+    await ctx.reply('Дякую! Передаю на перевірку адміністратору. Очікуй відповіді 🔄', {
+      reply_markup: {
+        keyboard: [
+          [{ text: TEXTS.BTN_HOME }],
+        ],
+        resize_keyboard: true,
+      },
+    });
 
-    // Send to admin channel for verification
+    // Send to admin channel for manual verification
     try {
       const username = ctx.from.username ? `@${escapeHtml(ctx.from.username)}` : 'немає';
       const threadId = Number(process.env.USDT_ADMIN_THREAD_ID ?? 0) || undefined;
       await bot.telegram.sendMessage(
         adminChannelId,
-        `<b>MED usdt - канал</b>\n` +
+        `<b>MED usdt — перевірка</b>\n` +
         `Оплата в USDT потребує підтвердження 👇\n\n` +
         `▸ uid: <code>${telegramId}</code>\n` +
         `▸ username: ${username}\n` +

@@ -8,6 +8,7 @@ import { config } from 'dotenv';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFile, writeFile } from 'node:fs/promises';
+import pg from 'pg';
 
 /* ---------- Configuration ---------- */
 
@@ -94,6 +95,105 @@ app.get(
   { preHandler: [authenticate] },
   async (request) => {
     return { user: request.user };
+  }
+);
+
+/* ---------- Database ---------- */
+
+const dbPool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+
+/* ---------- Users API ---------- */
+
+/** GET /api/users — paginated user list with search and subscription filter */
+app.get<{
+  Querystring: { page?: string; limit?: string; search?: string; filter?: string };
+}>(
+  '/api/users',
+  { preHandler: [authenticate] },
+  async (request, reply) => {
+    try {
+      const page = Math.max(1, Number(request.query.page) || 1);
+      const limit = Math.min(100, Math.max(1, Number(request.query.limit) || 20));
+      const offset = (page - 1) * limit;
+      const search = (request.query.search ?? '').trim();
+      const filter = request.query.filter ?? 'all'; // all | active | inactive
+
+      const conditions: string[] = [];
+      const params: unknown[] = [];
+      let paramIndex = 1;
+
+      // Search by username, first_name, last_name, telegram_id or id (all CONTAINS)
+      if (search) {
+        conditions.push(
+          `(id::text ILIKE $${paramIndex} OR telegram_id::text ILIKE $${paramIndex} OR username ILIKE $${paramIndex} OR first_name ILIKE $${paramIndex} OR last_name ILIKE $${paramIndex} OR email ILIKE $${paramIndex})`
+        );
+        params.push(`%${search}%`);
+        paramIndex += 1;
+      }
+
+      // Subscription filter
+      if (filter === 'active') {
+        conditions.push(`is_subscribed = TRUE AND expires_at > NOW()`);
+      } else if (filter === 'inactive') {
+        conditions.push(`(is_subscribed = FALSE OR expires_at IS NULL OR expires_at <= NOW())`);
+      }
+
+      const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+      // Count total + counts per filter (for tab badges)
+      const countResult = await dbPool.query(
+        `SELECT COUNT(*) FROM users ${where}`,
+        params,
+      );
+      const total = Number(countResult.rows[0].count);
+
+      // Search-only conditions (without subscription filter) for tab counts
+      const searchConditions: string[] = [];
+      const searchParams: unknown[] = [];
+      if (search) {
+        searchConditions.push(
+          `(id::text ILIKE $1 OR telegram_id::text ILIKE $1 OR username ILIKE $1 OR first_name ILIKE $1 OR last_name ILIKE $1 OR email ILIKE $1)`
+        );
+        searchParams.push(`%${search}%`);
+      }
+      const searchWhere = searchConditions.length > 0 ? `WHERE ${searchConditions.join(' AND ')}` : '';
+
+      const countsResult = await dbPool.query(
+        `SELECT
+           COUNT(*) AS total_all,
+           COUNT(*) FILTER (WHERE is_subscribed = TRUE AND expires_at > NOW()) AS total_active,
+           COUNT(*) FILTER (WHERE is_subscribed = FALSE OR expires_at IS NULL OR expires_at <= NOW()) AS total_inactive
+         FROM users ${searchWhere}`,
+        searchParams,
+      );
+      const counts = {
+        all: Number(countsResult.rows[0].total_all),
+        active: Number(countsResult.rows[0].total_active),
+        inactive: Number(countsResult.rows[0].total_inactive),
+      };
+
+      // Fetch page
+      const dataResult = await dbPool.query(
+        `SELECT id, telegram_id, username, first_name, last_name, email,
+                is_subscribed, subscribed_at, expires_at, created_at
+         FROM users ${where}
+         ORDER BY created_at DESC
+         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+        [...params, limit, offset],
+      );
+
+      return {
+        users: dataResult.rows,
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+        counts,
+      };
+    } catch (err) {
+      app.log.error(err, 'Failed to fetch users');
+      return reply.status(500).send({ error: 'Failed to load users' });
+    }
   }
 );
 
