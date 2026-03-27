@@ -31,14 +31,22 @@ export async function migrate() {
     CREATE TABLE IF NOT EXISTS payments (
       id              SERIAL PRIMARY KEY,
       user_id         INTEGER REFERENCES users(id),
+      telegram_id     BIGINT,
       amount          DECIMAL(10,2) NOT NULL,
       currency        VARCHAR(10) NOT NULL,
       method          VARCHAR(20) NOT NULL,
       plan            VARCHAR(10) NOT NULL,
       status          VARCHAR(20) DEFAULT 'pending',
+      order_reference VARCHAR(255) UNIQUE,
       created_at      TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+
+  // Add columns that may not exist yet (safe to re-run)
+  await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS rec_token VARCHAR(255)`);
+  await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS card_pan VARCHAR(20)`);
+  await db.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS telegram_id BIGINT`);
+  await db.query(`ALTER TABLE payments ADD COLUMN IF NOT EXISTS order_reference VARCHAR(255) UNIQUE`);
 
   logger.info('Database migrated');
 }

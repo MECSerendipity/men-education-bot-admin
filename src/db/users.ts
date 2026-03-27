@@ -10,6 +10,8 @@ export interface User {
   is_subscribed: boolean;
   subscribed_at: Date | null;
   expires_at: Date | null;
+  rec_token: string | null;
+  card_pan: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -63,4 +65,41 @@ export async function hasActiveSubscription(telegramId: number): Promise<boolean
   if (!user.is_subscribed) return false;
   if (user.expires_at && new Date(user.expires_at) < new Date()) return false;
   return true;
+}
+
+/** Activate subscription and save recToken after successful payment.
+ *  If user has remaining days, extends from current expiry (not from now). */
+export async function activateSubscription(
+  telegramId: number,
+  months: number,
+  recToken: string | null,
+  cardPan: string | null,
+): Promise<void> {
+  // Check if user has unexpired subscription to extend from
+  const existing = await db.query(
+    'SELECT expires_at FROM users WHERE telegram_id = $1',
+    [telegramId],
+  );
+  const currentExpiry = existing.rows[0]?.expires_at;
+  const now = new Date();
+
+  // Extend from current expiry if it's in the future, otherwise from now
+  const baseDate = currentExpiry && new Date(currentExpiry) > now
+    ? new Date(currentExpiry)
+    : now;
+
+  const expiresAt = new Date(baseDate);
+  expiresAt.setMonth(expiresAt.getMonth() + months);
+
+  await db.query(
+    `UPDATE users SET
+       is_subscribed = TRUE,
+       subscribed_at = COALESCE(subscribed_at, NOW()),
+       expires_at = $1,
+       rec_token = COALESCE($2, rec_token),
+       card_pan = COALESCE($3, card_pan),
+       updated_at = NOW()
+     WHERE telegram_id = $4`,
+    [expiresAt, recToken, cardPan, telegramId],
+  );
 }
