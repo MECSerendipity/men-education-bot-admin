@@ -9,7 +9,7 @@ interface SidebarProps {
 interface NavItem {
   id: Page;
   label: string;
-  icon: JSX.Element;
+  icon: React.ReactNode;
 }
 
 /** Users icon */

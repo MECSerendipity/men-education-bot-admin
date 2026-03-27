@@ -4,8 +4,8 @@ import { TEXTS } from '../texts/index.js';
 
 /** Register navigation handlers (back button, etc.) */
 export function registerNavigationHandlers(bot: Telegraf) {
-  bot.hears(TEXTS.BTN_BACK, (ctx) => {
-    ctx.reply(TEXTS.MAIN_MENU, {
+  bot.hears(TEXTS.BTN_BACK, async (ctx) => {
+    await ctx.reply(TEXTS.MAIN_MENU, {
       reply_markup: MAIN_MENU_KEYBOARD,
     });
   });

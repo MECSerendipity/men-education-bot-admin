@@ -33,15 +33,12 @@ const app = Fastify({ logger: true });
 // Security headers (XSS, clickjacking, content-type sniffing protection)
 await app.register(helmet);
 
-// CORS — only allow requests from localhost
-await app.register(cors, {
-  origin: [
-    'http://localhost:5173',
-    'http://localhost:3001',
-    'http://127.0.0.1:5173',
-    'http://127.0.0.1:3001',
-  ],
-});
+// CORS — allow localhost in dev, or custom origin via ADMIN_CORS_ORIGIN in production
+const corsOrigins = process.env.ADMIN_CORS_ORIGIN
+  ? [process.env.ADMIN_CORS_ORIGIN]
+  : ['http://localhost:5173', 'http://localhost:3001', 'http://127.0.0.1:5173', 'http://127.0.0.1:3001'];
+
+await app.register(cors, { origin: corsOrigins });
 
 // Global rate limit — 100 requests per minute per IP
 await app.register(rateLimit, {
@@ -59,7 +56,7 @@ async function authenticate(request: FastifyRequest, reply: FastifyReply) {
   try {
     await request.jwtVerify();
   } catch {
-    reply.status(401).send({ error: 'Unauthorized' });
+    return reply.status(401).send({ error: 'Unauthorized' });
   }
 }
 

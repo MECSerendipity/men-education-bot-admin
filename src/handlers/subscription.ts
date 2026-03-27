@@ -4,8 +4,16 @@ import { TEXTS } from '../texts/index.js';
 
 /** Register "Тарифні плани" button handler */
 export function registerSubscriptionHandler(bot: Telegraf) {
-  // Tariff plans — show payment method selection
+  // Tariff plans — show payment method selection (text button)
   bot.hears(TEXTS.BTN_SUBSCRIPTION, async (ctx) => {
+    await ctx.reply('Обери спосіб оплати 👇', {
+      reply_markup: PAYMENT_KEYBOARD,
+    });
+  });
+
+  // Tariff plans — show payment method selection (inline callback from /start or "Моя підписка")
+  bot.action('subscription', async (ctx) => {
+    await ctx.answerCbQuery();
     await ctx.reply('Обери спосіб оплати 👇', {
       reply_markup: PAYMENT_KEYBOARD,
     });

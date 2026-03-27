@@ -1,5 +1,4 @@
 import { Telegraf } from 'telegraf';
-import { BACK_KEYBOARD } from '../keyboards/index.js';
 import { TEXTS } from '../texts/index.js';
 
 /** Register "Підтримка" button handler — links to @MEdopomoga */

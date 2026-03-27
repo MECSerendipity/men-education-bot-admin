@@ -1,12 +1,41 @@
 import { Telegraf } from 'telegraf';
 import { TEXTS } from '../texts/index.js';
 import { getUserByTelegramId, updateUserEmail } from '../db/users.js';
+import { escapeHtml } from '../utils/html.js';
+import { logger } from '../utils/logger.js';
 
-// Track users waiting to enter email + store the form message ID
-const waitingForEmail = new Map<number, { chatId: number; messageId: number }>();
+/** Email form state with TTL for automatic cleanup */
+interface EmailFormState {
+  chatId: number;
+  messageId: number;
+  createdAt: number;
+}
 
-/** Build account info message lines */
-function buildAccountText(user: { id: number; first_name: string; last_name?: string; username?: string }, email?: string | null, isSubscribed?: boolean, expiresAt?: Date | null) {
+/** Track users waiting to enter email — entries auto-expire after 10 minutes */
+const waitingForEmail = new Map<number, EmailFormState>();
+
+const EMAIL_FORM_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+/** Remove expired email form entries */
+function cleanupExpiredForms() {
+  const now = Date.now();
+  for (const [userId, state] of waitingForEmail) {
+    if (now - state.createdAt > EMAIL_FORM_TTL_MS) {
+      waitingForEmail.delete(userId);
+    }
+  }
+}
+
+// Run cleanup every 5 minutes
+setInterval(cleanupExpiredForms, 5 * 60 * 1000).unref();
+
+/** Build account info message lines (HTML-safe) */
+function buildAccountText(
+  user: { id: number; first_name: string; last_name?: string; username?: string },
+  email?: string | null,
+  isSubscribed?: boolean,
+  expiresAt?: Date | null,
+) {
   const subscriptionStatus = isSubscribed
     ? `✅ Активна (до ${expiresAt ? expiresAt.toLocaleDateString('uk-UA') : '∞'})`
     : '❌ Немає';
@@ -15,9 +44,9 @@ function buildAccountText(user: { id: number; first_name: string; last_name?: st
     '<b>👤 Мій акаунт</b>',
     '',
     `Telegram ID: <code>${user.id}</code>`,
-    `Ім'я: ${user.first_name}${user.last_name ? ' ' + user.last_name : ''}`,
-    `Username: ${user.username ? '@' + user.username : 'не вказано'}`,
-    `Email: ${email ?? 'не вказано'}`,
+    `Ім'я: ${escapeHtml(user.first_name)}${user.last_name ? ' ' + escapeHtml(user.last_name) : ''}`,
+    `Username: ${user.username ? '@' + escapeHtml(user.username) : 'не вказано'}`,
+    `Email: ${email ? escapeHtml(email) : 'не вказано'}`,
     `Підписка: ${subscriptionStatus}`,
   ].join('\n');
 }
@@ -32,10 +61,21 @@ function buildEmailFormText(error?: string) {
   ];
 
   if (error) {
-    lines.push('', `⚠️ ${error}`);
+    lines.push('', `⚠️ ${escapeHtml(error)}`);
   }
 
   return lines.join('\n');
+}
+
+/** Build inline keyboard for account view */
+function buildAccountKeyboard(hasEmail: boolean) {
+  return {
+    inline_keyboard: [
+      hasEmail
+        ? [{ text: '✏️ Змінити email', callback_data: 'change_email' }]
+        : [{ text: '📧 Додати email', callback_data: 'add_email' }],
+    ],
+  };
 }
 
 /** Register "Мій акаунт" button handler */
@@ -43,16 +83,13 @@ export function registerAccountHandler(bot: Telegraf) {
   bot.hears(TEXTS.BTN_ACCOUNT, async (ctx) => {
     const dbUser = await getUserByTelegramId(ctx.from.id);
 
-    const inlineKeyboard = dbUser?.email
-      ? [{ text: '✏️ Змінити email', callback_data: 'change_email' }]
-      : [{ text: '📧 Додати email', callback_data: 'add_email' }];
-
-    await ctx.reply(buildAccountText(ctx.from, dbUser?.email, dbUser?.is_subscribed, dbUser?.expires_at), {
-      parse_mode: 'HTML',
-      reply_markup: {
-        inline_keyboard: [inlineKeyboard],
+    await ctx.reply(
+      buildAccountText(ctx.from, dbUser?.email, dbUser?.is_subscribed, dbUser?.expires_at),
+      {
+        parse_mode: 'HTML',
+        reply_markup: buildAccountKeyboard(!!dbUser?.email),
       },
-    });
+    );
   });
 
   // Handle add/change email button — edit message to show email form
@@ -60,7 +97,11 @@ export function registerAccountHandler(bot: Telegraf) {
     await ctx.answerCbQuery();
 
     const msg = ctx.callbackQuery.message!;
-    waitingForEmail.set(ctx.from.id, { chatId: msg.chat.id, messageId: msg.message_id });
+    waitingForEmail.set(ctx.from.id, {
+      chatId: msg.chat.id,
+      messageId: msg.message_id,
+      createdAt: Date.now(),
+    });
 
     await ctx.editMessageText(buildEmailFormText(), {
       parse_mode: 'HTML',
@@ -78,19 +119,17 @@ export function registerAccountHandler(bot: Telegraf) {
     waitingForEmail.delete(ctx.from.id);
 
     const dbUser = await getUserByTelegramId(ctx.from.id);
-    const inlineKeyboard = dbUser?.email
-      ? [{ text: '✏️ Змінити email', callback_data: 'change_email' }]
-      : [{ text: '📧 Додати email', callback_data: 'add_email' }];
 
-    await ctx.editMessageText(buildAccountText(ctx.from, dbUser?.email, dbUser?.is_subscribed, dbUser?.expires_at), {
-      parse_mode: 'HTML',
-      reply_markup: {
-        inline_keyboard: [inlineKeyboard],
+    await ctx.editMessageText(
+      buildAccountText(ctx.from, dbUser?.email, dbUser?.is_subscribed, dbUser?.expires_at),
+      {
+        parse_mode: 'HTML',
+        reply_markup: buildAccountKeyboard(!!dbUser?.email),
       },
-    });
+    );
   });
 
-  // Handle email input
+  // Handle email input — only intercepts messages from users in email-entry mode
   bot.use(async (ctx, next) => {
     if (
       ctx.message &&
@@ -114,16 +153,21 @@ export function registerAccountHandler(bot: Telegraf) {
         );
 
         // After a short delay, show account info back
-        setTimeout(async () => {
-          const dbUser = await getUserByTelegramId(ctx.from!.id);
-          const inlineKeyboard = [{ text: '✏️ Змінити email', callback_data: 'change_email' }];
-          await ctx.telegram.editMessageText(chatId, messageId, undefined,
-            buildAccountText(ctx.from!, dbUser?.email, dbUser?.is_subscribed, dbUser?.expires_at),
-            {
-              parse_mode: 'HTML',
-              reply_markup: { inline_keyboard: [inlineKeyboard] },
-            },
-          );
+        setTimeout(() => {
+          (async () => {
+            try {
+              const dbUser = await getUserByTelegramId(ctx.from!.id);
+              await ctx.telegram.editMessageText(chatId, messageId, undefined,
+                buildAccountText(ctx.from!, dbUser?.email, dbUser?.is_subscribed, dbUser?.expires_at),
+                {
+                  parse_mode: 'HTML',
+                  reply_markup: buildAccountKeyboard(true),
+                },
+              );
+            } catch (err) {
+              logger.error('Failed to update account message after email save', err);
+            }
+          })();
         }, 1500);
       } else {
         // Show error in the same form message

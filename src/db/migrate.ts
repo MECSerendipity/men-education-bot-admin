@@ -1,4 +1,5 @@
 import { db } from './index.js';
+import { logger } from '../utils/logger.js';
 
 /** Run all migrations */
 export async function migrate() {
@@ -39,5 +40,5 @@ export async function migrate() {
     );
   `);
 
-  console.log('✅ Database migrated');
+  logger.info('Database migrated');
 }
