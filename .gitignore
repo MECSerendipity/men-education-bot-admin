@@ -9,3 +9,6 @@ dist/
 
 # OS files
 .DS_Store
+
+# Internal docs (not for repo)
+docs/

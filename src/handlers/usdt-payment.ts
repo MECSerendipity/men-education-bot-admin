@@ -1,45 +1,32 @@
 import { Telegraf, type Context } from 'telegraf';
 import { TEXTS } from '../texts/index.js';
-import { PLANS } from '../services/wayforpay.js';
-import { createPayment, getPaymentByOrderReference, updatePaymentStatus } from '../db/payments.js';
-import { activateSubscription } from '../db/users.js';
+import { getPricesForUser, type PricesSnapshot } from '../services/pricing.js';
+import { type PriceRow } from '../db/prices.js';
+import { createTransaction, updateTransactionStatus, updateTransactionTxHash, hasPendingCryptoTransaction } from '../db/transactions.js';
 import { escapeHtml } from '../utils/html.js';
 import { logger } from '../utils/logger.js';
+import { createTtlMap } from '../utils/ttl-map.js';
+import { MAIN_MENU_KEYBOARD } from '../keyboards/index.js';
+import { generateOrderReference } from '../utils/order-reference.js';
+import { SUPPORT_URL } from '../config.js';
 
-/** Map button text to plan key */
-const BUTTON_TO_PLAN: Record<string, string> = {
-  [TEXTS.BTN_USDT_1M]: 'usdt_1m',
-  [TEXTS.BTN_USDT_6M]: 'usdt_6m',
-  [TEXTS.BTN_USDT_12M]: 'usdt_12m',
+/** Map duration to crypto plan key */
+const DURATION_TO_CRYPTO_KEY: Record<string, string> = {
+  '12m': 'crypto_12m',
+  '6m': 'crypto_6m',
+  '1m': 'crypto_1m',
 };
 
 /** Track users waiting to enter transaction hash */
 interface HashFormState {
   orderReference: string;
   planKey: string;
+  plan: PriceRow;
+  prices: PricesSnapshot;
   createdAt: number;
 }
 
-const waitingForHash = new Map<number, HashFormState>();
-
-const HASH_FORM_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
-
-/** Remove expired hash form entries */
-function cleanupExpiredForms() {
-  const now = Date.now();
-  for (const [userId, state] of waitingForHash) {
-    if (now - state.createdAt > HASH_FORM_TTL_MS) {
-      waitingForHash.delete(userId);
-    }
-  }
-}
-
-setInterval(cleanupExpiredForms, 5 * 60 * 1000).unref();
-
-/** Generate unique order reference for USDT */
-function generateOrderReference(telegramId: number): string {
-  return `ME_USDT_${telegramId}_${Date.now()}`;
-}
+const waitingForHash = createTtlMap<HashFormState>(6 * 60 * 60 * 1000); // 6 hours
 
 /** Get env vars */
 function getWalletAddress(): string {
@@ -58,13 +45,23 @@ function getTopUpInstructionUrl(): string {
   return process.env.USDT_TOP_UP_INSTRUCTION_URL ?? '';
 }
 
-/** Handle USDT tariff button click */
-async function handleUsdtTariffClick(ctx: Context, planKey: string): Promise<void> {
-  const plan = PLANS[planKey];
-  if (!plan || !ctx.from) return;
+/** Handle crypto payment flow — called from subscription handler via callback */
+async function handleCryptoPayment(ctx: Context, duration: string): Promise<void> {
+  const planKey = DURATION_TO_CRYPTO_KEY[duration];
+  if (!planKey || !ctx.from) return;
 
   const telegramId = ctx.from.id;
-  const orderReference = generateOrderReference(telegramId);
+  const prices = await getPricesForUser(telegramId);
+  const plan = prices[planKey];
+  if (!plan) return;
+
+  // Block if user already has a pending crypto payment
+  if (await hasPendingCryptoTransaction(telegramId)) {
+    await ctx.reply('У тебе вже є активний USDT платіж. Дочекайся його обробки.');
+    return;
+  }
+
+  const orderReference = generateOrderReference(telegramId, 'crypto');
   const walletAddress = getWalletAddress();
 
   if (!walletAddress) {
@@ -74,11 +71,11 @@ async function handleUsdtTariffClick(ctx: Context, planKey: string): Promise<voi
   }
 
   try {
-    await createPayment({
+    await createTransaction({
       telegramId,
       amount: plan.amount,
       currency: plan.currency,
-      method: 'usdt',
+      method: 'crypto',
       plan: planKey,
       orderReference,
     });
@@ -87,34 +84,34 @@ async function handleUsdtTariffClick(ctx: Context, planKey: string): Promise<voi
     waitingForHash.set(telegramId, {
       orderReference,
       planKey,
+      plan,
+      prices,
       createdAt: Date.now(),
     });
 
-    // Show order details (without order reference — internal only)
-    await ctx.reply(
-      `📦 ${escapeHtml(plan.label)}\n` +
-      `💰 Сума: ${plan.amount} USDT`,
-      { parse_mode: 'HTML' },
-    );
-
-    // Show wallet address (copyable via <code> tag)
-    await ctx.reply('Надішли USDT у мережі TRC-20 на адресу:');
-    await ctx.reply(`<code>${escapeHtml(walletAddress)}</code>`, { parse_mode: 'HTML' });
-
-    // Instructions
+    // Single message with all payment info
     await ctx.reply(
       'Прочитай уважно інструкцію 👇\n\n' +
       'Важливо! При переведенні з тебе зніметься комісія, тому конвертуй свою валюту в крипту З ВРАХУВАННЯМ КОМІСІЇ.\n\n' +
       'Після оплати ОБОВ\'ЯЗКОВО скопіюй TxID (Хеш) транзакції ❗️\n' +
       'І ТІЛЬКИ ПІСЛЯ ОПЛАТИ - натисни кнопку "✅ Я оплатив" 👇\n' +
       'Далі дотримуйся інструкцій бота.\n\n' +
-      'Виникло питання до підтримки - натисни кнопку "❓ Є питання"',
+      'Виникло питання до підтримки - натисни кнопку "Є питання❓"\n\n' +
+      '━━━━━━━━━━━━━━━━━━━━\n\n' +
+      `📦 ${escapeHtml(plan.label)}\n` +
+      `ℹ️ Сума оплати — ${plan.amount} USDT\n\n` +
+      'Монета: Tether (USDT)\n' +
+      'Мережа: TRON — TRC20\n\n' +
+      `До сплати: <b>${plan.amount} USDT</b>\n\n` +
+      'Тисни на адресу, щоб скопіювати 👇\n' +
+      `<code>${escapeHtml(walletAddress)}</code>`,
       {
+        parse_mode: 'HTML',
         reply_markup: {
           inline_keyboard: [
             [{ text: 'Інструкція як дивитись хеш транзакції 🔗', url: getHashInstructionUrl() }],
             [{ text: 'Інструкція як поповняти крипту 🔗', url: getTopUpInstructionUrl() }],
-            [{ text: 'Є питання ❓', url: 'https://t.me/MEdopomoga' }],
+            [{ text: 'Є питання ❓', url: SUPPORT_URL }],
           ],
         },
       },
@@ -131,24 +128,18 @@ async function handleUsdtTariffClick(ctx: Context, planKey: string): Promise<voi
       },
     });
   } catch (err) {
-    logger.error('Failed to create USDT payment', err);
+    logger.error('Failed to create crypto payment', err);
     await ctx.reply('⚠️ Помилка створення платежу. Спробуй ще раз.');
   }
 }
 
-/** Register USDT payment handlers */
+/** Register crypto payment handlers */
 export function registerUsdtPaymentHandler(bot: Telegraf) {
-  // USDT tariff buttons
-  bot.hears(TEXTS.BTN_USDT_1M, async (ctx) => {
-    await handleUsdtTariffClick(ctx, BUTTON_TO_PLAN[TEXTS.BTN_USDT_1M]);
-  });
-
-  bot.hears(TEXTS.BTN_USDT_6M, async (ctx) => {
-    await handleUsdtTariffClick(ctx, BUTTON_TO_PLAN[TEXTS.BTN_USDT_6M]);
-  });
-
-  bot.hears(TEXTS.BTN_USDT_12M, async (ctx) => {
-    await handleUsdtTariffClick(ctx, BUTTON_TO_PLAN[TEXTS.BTN_USDT_12M]);
+  // Crypto payment selected from inline flow (pay:usdt:12m, pay:usdt:6m, pay:usdt:1m)
+  bot.action(/^pay:usdt:(\w+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const duration = ctx.match[1];
+    await handleCryptoPayment(ctx, duration);
   });
 
   // "✅ Я ОПЛАТИВ" button
@@ -180,16 +171,11 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
 
     if (state) {
       waitingForHash.delete(telegramId);
-      await updatePaymentStatus(state.orderReference, 'cancelled');
+      await updateTransactionStatus(state.orderReference, 'Cancelled');
     }
 
-    await ctx.reply('Оплату скасовано. Ти можеш обрати тариф знову.', {
-      reply_markup: {
-        keyboard: [
-          [{ text: TEXTS.BTN_HOME }],
-        ],
-        resize_keyboard: true,
-      },
+    await ctx.reply('Оплату скасовано.', {
+      reply_markup: MAIN_MENU_KEYBOARD,
     });
   });
 
@@ -213,7 +199,6 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
     // Clear waiting state
     waitingForHash.delete(telegramId);
 
-    const plan = PLANS[state.planKey];
     const adminChannelId = getAdminChannelId();
 
     if (!adminChannelId) {
@@ -222,18 +207,17 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
       return;
     }
 
-    // Update payment status
-    await updatePaymentStatus(state.orderReference, 'waiting_confirmation');
+    // Save hash and update payment status
+    await updateTransactionTxHash(state.orderReference, hash);
+    await updateTransactionStatus(state.orderReference, 'WaitingConfirmation');
 
     // Tell user we're sending for verification
-    await ctx.reply('Дякую! Передаю на перевірку адміністратору. Очікуй відповіді 🔄', {
-      reply_markup: {
-        keyboard: [
-          [{ text: TEXTS.BTN_HOME }],
-        ],
-        resize_keyboard: true,
-      },
-    });
+    await ctx.reply(
+      'Дякую! Передаю на перевірку адміністратору. Очікуй відповіді 🔄\n\n' +
+      'USDT транзакція перевіряється, я повідомлю про результат.\n' +
+      'Статус: Перевіряється 🔄',
+      { reply_markup: MAIN_MENU_KEYBOARD },
+    );
 
     // Send to admin channel for manual verification
     try {
@@ -245,8 +229,8 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
         `Оплата в USDT потребує підтвердження 👇\n\n` +
         `▸ uid: <code>${telegramId}</code>\n` +
         `▸ username: ${username}\n` +
-        `▸ Сума оплати: ${plan?.amount ?? '?'} USDT\n` +
-        `▸ План: ${plan?.label ?? state.planKey}\n` +
+        `▸ Сума оплати: ${state.plan.amount} USDT\n` +
+        `▸ План: ${escapeHtml(state.plan.label)}\n` +
         `▸ Хеш: <code>${escapeHtml(hash)}</code>\n` +
         `▸ Замовлення: <code>${escapeHtml(state.orderReference)}</code>`,
         {
@@ -268,99 +252,5 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
     }
   });
 
-  // Admin approve callback
-  bot.action(/^usdt_approve:(.+)$/, async (ctx) => {
-    const orderReference = ctx.match[1];
-    await handleAdminDecision(ctx, bot, orderReference, true);
-  });
-
-  // Admin deny callback
-  bot.action(/^usdt_deny:(.+)$/, async (ctx) => {
-    const orderReference = ctx.match[1];
-    await handleAdminDecision(ctx, bot, orderReference, false);
-  });
-}
-
-/** Handle admin confirm/deny decision */
-async function handleAdminDecision(
-  ctx: Context,
-  bot: Telegraf,
-  orderReference: string,
-  approved: boolean,
-): Promise<void> {
-  await ctx.answerCbQuery();
-
-  const payment = await getPaymentByOrderReference(orderReference);
-  if (!payment) {
-    await ctx.answerCbQuery('Платіж не знайдено');
-    return;
-  }
-
-  if (payment.status !== 'waiting_confirmation') {
-    await ctx.answerCbQuery('Цей платіж вже оброблено');
-    return;
-  }
-
-  const plan = PLANS[payment.plan];
-  const adminUsername = 'from' in ctx && ctx.from?.username ? `@${ctx.from.username}` : 'Admin';
-
-  if (approved) {
-    await updatePaymentStatus(orderReference, 'Approved');
-    const months = plan?.months ?? 1;
-    await activateSubscription(payment.telegram_id, months, null, null);
-
-    // Notify user
-    try {
-      await bot.telegram.sendMessage(
-        payment.telegram_id,
-        `✅ Оплата підтверджена!\n\n` +
-        `📦 ${plan?.label ?? 'Підписка ME Club'}\n` +
-        `💰 ${payment.amount} USDT\n\n` +
-        `Дякуємо! Підписка активована 🎉`,
-      );
-    } catch (err) {
-      logger.error('Failed to send USDT approval to user', err);
-    }
-
-    // Update admin message
-    try {
-      await ctx.editMessageText(
-        (ctx.callbackQuery && 'message' in ctx.callbackQuery ? (ctx.callbackQuery.message as { text?: string })?.text : '') +
-        `\n\n✅ Підтверджено — ${adminUsername}`,
-        { parse_mode: 'HTML' },
-      );
-    } catch {
-      // Ignore edit errors
-    }
-  } else {
-    await updatePaymentStatus(orderReference, 'Declined');
-
-    // Notify user
-    try {
-      await bot.telegram.sendMessage(
-        payment.telegram_id,
-        `На жаль, ми не можемо підтвердити твій хеш — зверніся у підтримку`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: 'Підтримка 😊', url: 'https://t.me/MEdopomoga' }],
-            ],
-          },
-        },
-      );
-    } catch (err) {
-      logger.error('Failed to send USDT denial to user', err);
-    }
-
-    // Update admin message
-    try {
-      await ctx.editMessageText(
-        (ctx.callbackQuery && 'message' in ctx.callbackQuery ? (ctx.callbackQuery.message as { text?: string })?.text : '') +
-        `\n\n❌ Не підтверджено — ${adminUsername}`,
-        { parse_mode: 'HTML' },
-      );
-    } catch {
-      // Ignore edit errors
-    }
-  }
+  // Note: admin approve/deny callbacks are in usdt-admin.ts
 }

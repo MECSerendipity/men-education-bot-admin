@@ -1,8 +1,10 @@
 import { Telegraf } from 'telegraf';
 import { TEXTS } from '../texts/index.js';
 import { getUserByTelegramId, updateUserEmail } from '../db/users.js';
+import { getActiveSubscription } from '../db/subscriptions.js';
 import { escapeHtml } from '../utils/html.js';
 import { logger } from '../utils/logger.js';
+import { createTtlMap } from '../utils/ttl-map.js';
 
 /** Email form state with TTL for automatic cleanup */
 interface EmailFormState {
@@ -12,32 +14,16 @@ interface EmailFormState {
 }
 
 /** Track users waiting to enter email — entries auto-expire after 10 minutes */
-const waitingForEmail = new Map<number, EmailFormState>();
-
-const EMAIL_FORM_TTL_MS = 10 * 60 * 1000; // 10 minutes
-
-/** Remove expired email form entries */
-function cleanupExpiredForms() {
-  const now = Date.now();
-  for (const [userId, state] of waitingForEmail) {
-    if (now - state.createdAt > EMAIL_FORM_TTL_MS) {
-      waitingForEmail.delete(userId);
-    }
-  }
-}
-
-// Run cleanup every 5 minutes
-setInterval(cleanupExpiredForms, 5 * 60 * 1000).unref();
+const waitingForEmail = createTtlMap<EmailFormState>(10 * 60 * 1000);
 
 /** Build account info message lines (HTML-safe) */
-function buildAccountText(
+async function buildAccountText(
   user: { id: number; first_name: string; last_name?: string; username?: string },
   email?: string | null,
-  isSubscribed?: boolean,
-  expiresAt?: Date | null,
 ) {
-  const subscriptionStatus = isSubscribed
-    ? `✅ Активна (до ${expiresAt ? expiresAt.toLocaleDateString('uk-UA') : '∞'})`
+  const sub = await getActiveSubscription(user.id);
+  const subscriptionStatus = sub
+    ? `✅ Активна (до ${new Date(sub.expires_at).toLocaleDateString('uk-UA')})`
     : '❌ Немає';
 
   return [
@@ -84,7 +70,7 @@ export function registerAccountHandler(bot: Telegraf) {
     const dbUser = await getUserByTelegramId(ctx.from.id);
 
     await ctx.reply(
-      buildAccountText(ctx.from, dbUser?.email, dbUser?.is_subscribed, dbUser?.expires_at),
+      await buildAccountText(ctx.from, dbUser?.email),
       {
         parse_mode: 'HTML',
         reply_markup: buildAccountKeyboard(!!dbUser?.email),
@@ -121,7 +107,7 @@ export function registerAccountHandler(bot: Telegraf) {
     const dbUser = await getUserByTelegramId(ctx.from.id);
 
     await ctx.editMessageText(
-      buildAccountText(ctx.from, dbUser?.email, dbUser?.is_subscribed, dbUser?.expires_at),
+      await buildAccountText(ctx.from, dbUser?.email),
       {
         parse_mode: 'HTML',
         reply_markup: buildAccountKeyboard(!!dbUser?.email),
@@ -153,21 +139,19 @@ export function registerAccountHandler(bot: Telegraf) {
         );
 
         // After a short delay, show account info back
-        setTimeout(() => {
-          (async () => {
-            try {
-              const dbUser = await getUserByTelegramId(ctx.from!.id);
-              await ctx.telegram.editMessageText(chatId, messageId, undefined,
-                buildAccountText(ctx.from!, dbUser?.email, dbUser?.is_subscribed, dbUser?.expires_at),
-                {
-                  parse_mode: 'HTML',
-                  reply_markup: buildAccountKeyboard(true),
-                },
-              );
-            } catch (err) {
-              logger.error('Failed to update account message after email save', err);
-            }
-          })();
+        setTimeout(async () => {
+          try {
+            const dbUser = await getUserByTelegramId(ctx.from!.id);
+            await ctx.telegram.editMessageText(chatId, messageId, undefined,
+              await buildAccountText(ctx.from!, dbUser?.email),
+              {
+                parse_mode: 'HTML',
+                reply_markup: buildAccountKeyboard(true),
+              },
+            );
+          } catch (err) {
+            logger.error('Failed to update account message after email save', err);
+          }
         }, 1500);
       } else {
         // Show error in the same form message

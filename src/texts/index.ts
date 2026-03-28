@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { logger } from '../utils/logger.js';
 
 /** All known text keys used in the bot */
 export type TextKey =
@@ -18,19 +19,19 @@ export type TextKey =
   | 'ACCOUNT_EMAIL_INVALID'
   | 'BTN_SUPPORT'
   | 'SUPPORT'
+  | 'TARIFF_TITLE'
+  | 'TARIFF_DETAIL_1M'
+  | 'TARIFF_DETAIL_6M'
+  | 'TARIFF_DETAIL_12M'
+  | 'BTN_TARIFF_12M'
+  | 'BTN_TARIFF_6M'
+  | 'BTN_TARIFF_1M'
+  | 'PAYMENT_METHOD_TITLE'
   | 'BTN_PAY_CARD'
   | 'BTN_PAY_USDT'
-  | 'PAY_CARD'
-  | 'PAY_USDT'
-  | 'BTN_CARD_1M'
-  | 'BTN_CARD_6M'
-  | 'BTN_CARD_12M'
-  | 'BTN_USDT_1M'
-  | 'BTN_USDT_6M'
-  | 'BTN_USDT_12M'
+  | 'BTN_BACK_TARIFFS'
   | 'BTN_USDT_PAID'
   | 'BTN_USDT_CANCEL'
-  | 'BTN_CHANGE_PAYMENT'
   | 'BTN_HOME'
   | 'BTN_BACK'
   | 'ABOUT';
@@ -42,19 +43,31 @@ export type TextKey =
  */
 const TEXTS_PATH = join(process.cwd(), 'src', 'texts', 'texts.json');
 
-/**
- * All bot message texts loaded from texts.json.
- *
- * Current approach: texts are loaded once at startup from a JSON file.
- * The admin panel can edit this file, and `tsx watch` will restart the bot
- * to pick up changes automatically.
- *
- * TODO: When we migrate to PostgreSQL, replace this with a TextService that:
- * 1. Loads all texts from DB into an in-memory Map on bot startup
- * 2. Serves texts from memory (0ms, no DB queries per message)
- * 3. Exposes a refreshTexts() method called via API when admin edits a text
- * 4. This way the bot never queries DB per user message — only on cache refresh
- */
-export const TEXTS: Record<TextKey, string> = JSON.parse(
+/** In-memory cache — loaded once at startup, reloaded manually via reloadTexts() */
+let cache: Record<TextKey, string> = JSON.parse(
   readFileSync(TEXTS_PATH, 'utf-8'),
 );
+
+/**
+ * All bot texts. Read from in-memory cache (0ms).
+ * Call reloadTexts() to pick up changes from texts.json.
+ */
+export const TEXTS: Record<TextKey, string> = new Proxy({} as Record<TextKey, string>, {
+  get(_target, prop: string) {
+    return cache[prop as TextKey];
+  },
+});
+
+/**
+ * Reload texts from texts.json into memory.
+ * Called from webhook server when admin clicks "Apply changes".
+ */
+export function reloadTexts(): void {
+  try {
+    cache = JSON.parse(readFileSync(TEXTS_PATH, 'utf-8'));
+    logger.info('Texts reloaded from file');
+  } catch (err) {
+    logger.error('Failed to reload texts.json', err);
+    throw err;
+  }
+}

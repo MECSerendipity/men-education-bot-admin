@@ -1,6 +1,6 @@
 import { Telegraf } from 'telegraf';
 import { TEXTS } from '../texts/index.js';
-import { hasActiveSubscription } from '../db/users.js';
+import { hasActiveSubscription } from '../db/subscriptions.js';
 
 /** Register "Моя підписка" button handler — checks subscription status */
 export function registerMySubscriptionHandler(bot: Telegraf) {

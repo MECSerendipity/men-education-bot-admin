@@ -1,9 +1,13 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { Telegraf } from 'telegraf';
 import { logger } from '../utils/logger.js';
-import { buildPaymentPage, generateCallbackSignature, generateResponseSignature, PLANS } from '../services/wayforpay.js';
-import { getPaymentByOrderReference, updatePaymentStatus } from '../db/payments.js';
-import { activateSubscription } from '../db/users.js';
+import { buildPaymentPage, generateCallbackSignature, generateResponseSignature } from '../services/wayforpay.js';
+import { getTransactionByOrderReference, updateTransactionStatus, updateTransactionCard } from '../db/transactions.js';
+import { activateSubscription } from '../db/subscriptions.js';
+import { getPricesForUser, daysFromPlanKey } from '../services/pricing.js';
+import { getGlobalPrices, deleteOffersForUser } from '../db/prices.js';
+import { sendRulesOrInvite } from '../handlers/rules.js';
+import { reloadTexts } from '../texts/index.js';
 
 const MAX_BODY_SIZE = 64 * 1024; // 64 KB — more than enough for WayForPay callbacks
 
@@ -35,7 +39,7 @@ const PAYMENT_LINK_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
 /** Handle GET /pay/:orderReference — render auto-submit form to WayForPay */
 async function handlePayPage(orderReference: string, res: ServerResponse): Promise<void> {
-  const payment = await getPaymentByOrderReference(orderReference);
+  const payment = await getTransactionByOrderReference(orderReference);
   if (!payment) {
     res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(expiredPage('Платіж не знайдено', 'Цього платежу не існує. Створи новий в боті.'));
@@ -45,22 +49,22 @@ async function handlePayPage(orderReference: string, res: ServerResponse): Promi
   // Check if link expired (15 minutes)
   const age = Date.now() - new Date(payment.created_at).getTime();
   if (age > PAYMENT_LINK_TTL_MS) {
-    await updatePaymentStatus(orderReference, 'expired');
+    await updateTransactionStatus(orderReference, 'Expired');
     res.writeHead(410, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(expiredPage('Посилання протерміноване ⏰', 'Це посилання на оплату діяло 15 хвилин і вже не активне.<br>Поверніться в Telegram бот і створіть нову оплату.'));
     return;
   }
 
   // Don't allow paying already completed/expired payments
-  if (payment.status !== 'pending') {
+  if (payment.status !== 'Pending') {
     res.writeHead(410, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(expiredPage('Платіж вже оброблено', 'Цей платіж вже було оброблено. Перевір статус у боті.'));
     return;
   }
 
-  const plan = Object.values(PLANS).find(
-    (p) => p.amount === Number(payment.amount) && p.currency === payment.currency,
-  );
+  // Get product name from global prices
+  const globalPrices = await getGlobalPrices();
+  const plan = globalPrices[payment.plan];
   const productName = plan?.label ?? 'Підписка ME Club';
   const orderDate = Math.floor(new Date(payment.created_at).getTime() / 1000);
 
@@ -103,7 +107,7 @@ async function handleSuccessPage(req: IncomingMessage, res: ServerResponse): Pro
   // Check actual payment status if we have an order reference
   let isApproved = false;
   if (orderRef) {
-    const payment = await getPaymentByOrderReference(orderRef);
+    const payment = await getTransactionByOrderReference(orderRef);
     isApproved = payment?.status === 'Approved';
   }
 
@@ -173,11 +177,11 @@ async function handleCallback(req: IncomingMessage, res: ServerResponse, bot: Te
   const cardPan = data.cardPan ? String(data.cardPan) : null;
 
   // Find payment in DB
-  const payment = await getPaymentByOrderReference(orderReference);
+  const payment = await getTransactionByOrderReference(orderReference);
 
   if (payment) {
     // Skip if already processed (WayForPay retries callbacks for 4 days)
-    if (payment.status !== 'pending') {
+    if (payment.status !== 'Pending') {
       logger.info('Callback for already processed payment, skipping', { orderReference, currentStatus: payment.status });
       const time = Math.floor(Date.now() / 1000);
       const responseSignature = generateResponseSignature(orderReference, 'accept', time);
@@ -186,20 +190,24 @@ async function handleCallback(req: IncomingMessage, res: ServerResponse, bot: Te
       return;
     }
 
-    await updatePaymentStatus(orderReference, transactionStatus);
-
-    const planKey = payment.plan;
-    const plan = PLANS[planKey];
+    await updateTransactionStatus(orderReference, transactionStatus);
 
     if (transactionStatus === 'Approved') {
-      const months = plan?.months ?? 1;
+      const days = daysFromPlanKey(payment.plan);
 
-      // Activate subscription
-      await activateSubscription(payment.telegram_id, months, recToken, cardPan);
+      // Save card details on transaction
+      await updateTransactionCard(orderReference, recToken, cardPan);
+
+      // Get prices and activate subscription with snapshot
+      const prices = await getPricesForUser(payment.telegram_id);
+      await activateSubscription(payment.telegram_id, payment.plan, 'card', days, payment.id, prices);
+
+      // Delete price offers after successful payment
+      await deleteOffersForUser(payment.telegram_id);
 
       // Notify user in Telegram
       try {
-        const planLabel = plan?.label ?? 'Підписка ME Club';
+        const planLabel = prices[payment.plan]?.label ?? 'Підписка ME Club';
         await bot.telegram.sendMessage(
           payment.telegram_id,
           `✅ Оплата пройшла успішно!\n\n` +
@@ -211,6 +219,9 @@ async function handleCallback(req: IncomingMessage, res: ServerResponse, bot: Te
       } catch (err) {
         logger.error('Failed to send payment success message', err);
       }
+
+      // Send rules or invite link
+      await sendRulesOrInvite(bot, payment.telegram_id);
     } else if (transactionStatus === 'Declined') {
       // Notify user about failed payment
       const reason = String(data.reason ?? 'Невідома помилка');
@@ -273,6 +284,19 @@ export function startWebhookServer(bot: Telegraf): void {
       // POST /api/wayforpay/callback
       if (req.method === 'POST' && segments[0] === 'api' && segments[1] === 'wayforpay' && segments[2] === 'callback') {
         await handleCallback(req, res, bot);
+        return;
+      }
+
+      // POST /internal/reload-texts — called by admin panel to apply text changes
+      if (req.method === 'POST' && segments[0] === 'internal' && segments[1] === 'reload-texts') {
+        try {
+          reloadTexts();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true }));
+        } catch {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Failed to reload texts' }));
+        }
         return;
       }
 

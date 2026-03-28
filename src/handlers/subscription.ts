@@ -1,29 +1,45 @@
 import { Telegraf, type Context } from 'telegraf';
-import { PAYMENT_KEYBOARD, CARD_TARIFF_KEYBOARD, USDT_TARIFF_KEYBOARD, MAIN_MENU_KEYBOARD } from '../keyboards/index.js';
+import { buildTariffKeyboard, paymentMethodKeyboard } from '../keyboards/index.js';
 import { TEXTS } from '../texts/index.js';
-import { PLANS } from '../services/wayforpay.js';
-import { createPayment } from '../db/payments.js';
+import { getPricesForUser } from '../services/pricing.js';
+import { createTransaction, hasPendingCardTransaction } from '../db/transactions.js';
 import { logger } from '../utils/logger.js';
+import { generateOrderReference } from '../utils/order-reference.js';
 
-/** Map button text to plan key */
-const BUTTON_TO_PLAN: Record<string, string> = {
-  [TEXTS.BTN_CARD_1M]: 'card_1m',
-  [TEXTS.BTN_CARD_6M]: 'card_6m',
-  [TEXTS.BTN_CARD_12M]: 'card_12m',
+/** Map duration code to plan keys and detail text key */
+const DURATION_MAP: Record<string, { card: string; crypto: string; detailKey: keyof typeof TEXTS }> = {
+  '12m': { card: 'card_12m', crypto: 'crypto_12m', detailKey: 'TARIFF_DETAIL_12M' },
+  '6m':  { card: 'card_6m',  crypto: 'crypto_6m',  detailKey: 'TARIFF_DETAIL_6M' },
+  '1m':  { card: 'card_1m',  crypto: 'crypto_1m',  detailKey: 'TARIFF_DETAIL_1M' },
 };
 
-/** Generate unique order reference */
-function generateOrderReference(telegramId: number): string {
-  return `ME_${telegramId}_${Date.now()}`;
+/** Show tariff selection inline keyboard (new message) */
+async function showTariffs(ctx: Context) {
+  if (!ctx.from) return;
+  const prices = await getPricesForUser(ctx.from.id);
+  await ctx.reply(TEXTS.TARIFF_TITLE, {
+    parse_mode: 'HTML',
+    reply_markup: buildTariffKeyboard(prices),
+  });
 }
 
-/** Handle card tariff button click — create payment and send payment link */
-async function handleCardTariffClick(ctx: Context, planKey: string): Promise<void> {
-  const plan = PLANS[planKey];
-  if (!plan || !ctx.from) return;
+/** Handle card payment — create payment and send payment link */
+async function handleCardPayment(ctx: Context, duration: string): Promise<void> {
+  const info = DURATION_MAP[duration];
+  if (!info || !ctx.from) return;
 
   const telegramId = ctx.from.id;
-  const orderReference = generateOrderReference(telegramId);
+
+  if (await hasPendingCardTransaction(telegramId)) {
+    await ctx.reply('У тебе вже є активний платіж. Скористайся попереднім посиланням або зачекай 15 хвилин.');
+    return;
+  }
+
+  const prices = await getPricesForUser(telegramId);
+  const plan = prices[info.card];
+  if (!plan) return;
+
+  const orderReference = generateOrderReference(telegramId, 'card');
   const webhookBaseUrl = process.env.WEBHOOK_BASE_URL;
 
   if (!webhookBaseUrl) {
@@ -33,12 +49,12 @@ async function handleCardTariffClick(ctx: Context, planKey: string): Promise<voi
   }
 
   try {
-    await createPayment({
+    await createTransaction({
       telegramId,
       amount: plan.amount,
       currency: plan.currency,
       method: 'card',
-      plan: planKey,
+      plan: info.card,
       orderReference,
     });
 
@@ -60,61 +76,78 @@ async function handleCardTariffClick(ctx: Context, planKey: string): Promise<voi
   }
 }
 
-/** Register "Тарифні плани" button handler */
+/** Register subscription flow handlers */
 export function registerSubscriptionHandler(bot: Telegraf) {
-  // Tariff plans — show payment method selection (text button)
+  // "Тарифні плани" reply keyboard button → new message with tariffs
   bot.hears(TEXTS.BTN_SUBSCRIPTION, async (ctx) => {
-    await ctx.reply('Обери спосіб оплати 👇', {
-      reply_markup: PAYMENT_KEYBOARD,
-    });
+    await showTariffs(ctx);
   });
 
-  // Tariff plans — show payment method selection (inline callback from /start or "Моя підписка")
+  // "ВХІД В ME CLUB" inline button or "Моя підписка" → edit existing message
   bot.action('subscription', async (ctx) => {
     await ctx.answerCbQuery();
-    await ctx.reply('Обери спосіб оплати 👇', {
-      reply_markup: PAYMENT_KEYBOARD,
+    if (!ctx.from) return;
+    const prices = await getPricesForUser(ctx.from.id);
+    await ctx.editMessageText(TEXTS.TARIFF_TITLE, {
+      parse_mode: 'HTML',
+      reply_markup: buildTariffKeyboard(prices),
     });
   });
 
-  // Card payment — show prices + tariff keyboard
-  bot.hears(TEXTS.BTN_PAY_CARD, async (ctx) => {
-    await ctx.reply(TEXTS.PAY_CARD, {
-      reply_markup: CARD_TARIFF_KEYBOARD,
+  // Step 1: Tariff selected → show payment method
+  bot.action(/^tariff:(\w+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!ctx.from) return;
+    const duration = ctx.match[1];
+    const info = DURATION_MAP[duration];
+    if (!info) return;
+
+    const prices = await getPricesForUser(ctx.from.id);
+    const cardPlan = prices[info.card];
+    const cryptoPlan = prices[info.crypto];
+
+    const text =
+      (TEXTS[info.detailKey] ?? '') + '\n\n' +
+      `💳 Карткою: ${cardPlan?.amount ?? '?'} ${cardPlan?.currency ?? 'UAH'}\n` +
+      `⚡️ USDT: ${cryptoPlan?.amount ?? '?'} USDT\n\n` +
+      (TEXTS.PAYMENT_METHOD_TITLE ?? 'Обери спосіб оплати:');
+
+    await ctx.editMessageText(text, {
+      parse_mode: 'HTML',
+      reply_markup: paymentMethodKeyboard(duration),
     });
   });
 
-  // USDT payment — show prices + tariff keyboard
-  bot.hears(TEXTS.BTN_PAY_USDT, async (ctx) => {
-    await ctx.reply(TEXTS.PAY_USDT, {
-      reply_markup: USDT_TARIFF_KEYBOARD,
+  // Step 2: Card payment selected → create payment and send link
+  bot.action(/^pay:card:(\w+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const duration = ctx.match[1];
+    await handleCardPayment(ctx, duration);
+  });
+  // Note: pay:usdt:* is handled in usdt-payment handler
+
+  // Back to tariffs
+  bot.action('back:tariffs', async (ctx) => {
+    await ctx.answerCbQuery();
+    if (!ctx.from) return;
+    const prices = await getPricesForUser(ctx.from.id);
+    await ctx.editMessageText(TEXTS.TARIFF_TITLE, {
+      parse_mode: 'HTML',
+      reply_markup: buildTariffKeyboard(prices),
     });
   });
 
-  // Card tariff buttons — create payment and send link
-  bot.hears(TEXTS.BTN_CARD_1M, async (ctx) => {
-    await handleCardTariffClick(ctx, BUTTON_TO_PLAN[TEXTS.BTN_CARD_1M]);
-  });
-
-  bot.hears(TEXTS.BTN_CARD_6M, async (ctx) => {
-    await handleCardTariffClick(ctx, BUTTON_TO_PLAN[TEXTS.BTN_CARD_6M]);
-  });
-
-  bot.hears(TEXTS.BTN_CARD_12M, async (ctx) => {
-    await handleCardTariffClick(ctx, BUTTON_TO_PLAN[TEXTS.BTN_CARD_12M]);
-  });
-
-  // Change payment method — back to payment selection
-  bot.hears(TEXTS.BTN_CHANGE_PAYMENT, async (ctx) => {
-    await ctx.reply('Обери спосіб оплати 👇', {
-      reply_markup: PAYMENT_KEYBOARD,
+  // Back to about/start screen (from inline tariff selection)
+  bot.action('back:main', async (ctx) => {
+    await ctx.answerCbQuery();
+    await ctx.editMessageText(TEXTS.ABOUT, {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: TEXTS.BTN_SUBSCRIPTION_INLINE, callback_data: 'subscription' }],
+        ],
+      },
     });
   });
 
-  // Back to main menu
-  bot.hears(TEXTS.BTN_HOME, async (ctx) => {
-    await ctx.reply(TEXTS.MAIN_MENU, {
-      reply_markup: MAIN_MENU_KEYBOARD,
-    });
-  });
+  // Note: BTN_HOME handler is in navigation.ts
 }

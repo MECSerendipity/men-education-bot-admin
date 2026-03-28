@@ -183,6 +183,8 @@ export function TextsPage() {
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [applying, setApplying] = useState(false);
+  const [hasUnsaved, setHasUnsaved] = useState(false);
 
   /** Fetch all texts from the API */
   const fetchTexts = useCallback(async () => {
@@ -229,6 +231,28 @@ export function TextsPage() {
     setTexts((prev) =>
       prev.map((entry) => (entry.key === key ? { ...entry, value } : entry))
     );
+    setHasUnsaved(true);
+  }
+
+  /** Apply text changes to the running bot */
+  async function handleApply() {
+    setApplying(true);
+    const token = localStorage.getItem('admin_token');
+    try {
+      const res = await fetch('/api/texts/apply', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to apply');
+      }
+      setHasUnsaved(false);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to apply changes');
+    } finally {
+      setApplying(false);
+    }
   }
 
   /** Filter texts -- contains match on key or value */
@@ -254,6 +278,17 @@ export function TextsPage() {
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-2xl font-bold text-gray-900">Texts</h2>
         <div className="flex items-center gap-3">
+          <button
+            onClick={handleApply}
+            disabled={applying || !hasUnsaved}
+            className={`px-4 py-1.5 text-sm font-medium rounded-md cursor-pointer transition-colors ${
+              hasUnsaved
+                ? 'bg-green-600 text-white hover:bg-green-700'
+                : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+            } disabled:opacity-50`}
+          >
+            {applying ? 'Застосовую...' : 'Застосувати на боті'}
+          </button>
           <button
             onClick={fetchTexts}
             title="Refresh texts"

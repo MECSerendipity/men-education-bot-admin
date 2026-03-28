@@ -4,6 +4,7 @@ import { migrate } from './db/migrate.js';
 import { db } from './db/index.js';
 import { logger } from './utils/logger.js';
 import { startWebhookServer } from './webhook/server.js';
+import { expireOverdueSubscriptions } from './db/subscriptions.js';
 
 /* ---------- Config validation ---------- */
 
@@ -41,9 +42,27 @@ async function start() {
   // Start webhook server for WayForPay callbacks
   startWebhookServer(bot);
 
+  // Set bot commands menu (visible in Telegram sidebar)
+  await bot.telegram.setMyCommands([
+    { command: 'start', description: 'Перезапустити бота' },
+  ]);
+
   bot.launch(() => {
     logger.info('Bot started successfully');
   });
+
+  // Expire overdue subscriptions every 5 minutes
+  const expiryInterval = setInterval(async () => {
+    try {
+      const count = await expireOverdueSubscriptions();
+      if (count > 0) {
+        logger.info(`Expired ${count} overdue subscriptions`);
+      }
+    } catch (err) {
+      logger.error('Failed to expire subscriptions', err);
+    }
+  }, 5 * 60 * 1000);
+  expiryInterval.unref();
 
   // Graceful shutdown — stop bot and close DB pool
   const shutdown = (signal: string) => {

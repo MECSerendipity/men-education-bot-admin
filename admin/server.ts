@@ -75,7 +75,10 @@ app.post<{ Body: { login: string; password: string } }>(
     },
   },
   async (request, reply) => {
-    const { login, password } = request.body;
+    const { login, password } = request.body ?? {};
+    if (!login || !password) {
+      return reply.status(400).send({ error: 'Login and password are required' });
+    }
 
     // Constant-time comparison via bcrypt prevents timing attacks
     const isValidPassword = await bcrypt.compare(password, ADMIN_PASSWORD_HASH);
@@ -115,7 +118,9 @@ app.get<{
       const page = Math.max(1, Number(request.query.page) || 1);
       const limit = Math.min(100, Math.max(1, Number(request.query.limit) || 20));
       const offset = (page - 1) * limit;
-      const search = (request.query.search ?? '').trim();
+      const searchRaw = (request.query.search ?? '').trim();
+      // Escape ILIKE wildcards so user input like % or _ is treated literally
+      const search = searchRaw.replace(/[%_\\]/g, '\\$&');
       const filter = request.query.filter ?? 'all'; // all | active | inactive
 
       const conditions: string[] = [];
@@ -125,7 +130,7 @@ app.get<{
       // Search by username, first_name, last_name, telegram_id or id (all CONTAINS)
       if (search) {
         conditions.push(
-          `(id::text ILIKE $${paramIndex} OR telegram_id::text ILIKE $${paramIndex} OR username ILIKE $${paramIndex} OR first_name ILIKE $${paramIndex} OR last_name ILIKE $${paramIndex} OR email ILIKE $${paramIndex})`
+          `(u.id::text ILIKE $${paramIndex} OR u.telegram_id::text ILIKE $${paramIndex} OR u.username ILIKE $${paramIndex} OR u.first_name ILIKE $${paramIndex} OR u.last_name ILIKE $${paramIndex} OR u.email ILIKE $${paramIndex})`
         );
         params.push(`%${search}%`);
         paramIndex += 1;
@@ -133,16 +138,16 @@ app.get<{
 
       // Subscription filter
       if (filter === 'active') {
-        conditions.push(`is_subscribed = TRUE AND expires_at > NOW()`);
+        conditions.push(`u.is_subscribed = TRUE`);
       } else if (filter === 'inactive') {
-        conditions.push(`(is_subscribed = FALSE OR expires_at IS NULL OR expires_at <= NOW())`);
+        conditions.push(`u.is_subscribed = FALSE`);
       }
 
       const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
       // Count total + counts per filter (for tab badges)
       const countResult = await dbPool.query(
-        `SELECT COUNT(*) FROM users ${where}`,
+        `SELECT COUNT(*) FROM users u ${where}`,
         params,
       );
       const total = Number(countResult.rows[0].count);
@@ -152,7 +157,7 @@ app.get<{
       const searchParams: unknown[] = [];
       if (search) {
         searchConditions.push(
-          `(id::text ILIKE $1 OR telegram_id::text ILIKE $1 OR username ILIKE $1 OR first_name ILIKE $1 OR last_name ILIKE $1 OR email ILIKE $1)`
+          `(u.id::text ILIKE $1 OR u.telegram_id::text ILIKE $1 OR u.username ILIKE $1 OR u.first_name ILIKE $1 OR u.last_name ILIKE $1 OR u.email ILIKE $1)`
         );
         searchParams.push(`%${search}%`);
       }
@@ -161,9 +166,9 @@ app.get<{
       const countsResult = await dbPool.query(
         `SELECT
            COUNT(*) AS total_all,
-           COUNT(*) FILTER (WHERE is_subscribed = TRUE AND expires_at > NOW()) AS total_active,
-           COUNT(*) FILTER (WHERE is_subscribed = FALSE OR expires_at IS NULL OR expires_at <= NOW()) AS total_inactive
-         FROM users ${searchWhere}`,
+           COUNT(*) FILTER (WHERE u.is_subscribed = TRUE) AS total_active,
+           COUNT(*) FILTER (WHERE u.is_subscribed = FALSE) AS total_inactive
+         FROM users u ${searchWhere}`,
         searchParams,
       );
       const counts = {
@@ -172,12 +177,15 @@ app.get<{
         inactive: Number(countsResult.rows[0].total_inactive),
       };
 
-      // Fetch page
+      // Fetch page with subscription data via LEFT JOIN
       const dataResult = await dbPool.query(
-        `SELECT id, telegram_id, username, first_name, last_name, email,
-                is_subscribed, subscribed_at, expires_at, created_at
-         FROM users ${where}
-         ORDER BY created_at DESC
+        `SELECT u.id, u.telegram_id, u.username, u.first_name, u.last_name, u.email,
+                u.is_subscribed, u.created_at,
+                s.started_at AS subscribed_at, s.expires_at
+         FROM users u
+         LEFT JOIN subscriptions s ON s.telegram_id = u.telegram_id AND s.status = 'Active'
+         ${where}
+         ORDER BY u.created_at DESC
          LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
         [...params, limit, offset],
       );
@@ -196,6 +204,344 @@ app.get<{
     }
   }
 );
+
+/* ---------- Prices API ---------- */
+
+/** GET /api/prices — all global prices */
+app.get(
+  '/api/prices',
+  { preHandler: [authenticate] },
+  async (_request, reply) => {
+    try {
+      const result = await dbPool.query('SELECT * FROM prices ORDER BY key');
+      return result.rows;
+    } catch (err) {
+      app.log.error(err, 'Failed to fetch prices');
+      return reply.status(500).send({ error: 'Failed to load prices' });
+    }
+  }
+);
+
+/** PUT /api/prices/:key — update a global price */
+app.put<{ Params: { key: string }; Body: { amount: number } }>(
+  '/api/prices/:key',
+  { preHandler: [authenticate] },
+  async (request, reply) => {
+    try {
+      const { key } = request.params;
+      const amount = (request.body as { amount?: number })?.amount;
+      if (typeof amount !== 'number' || amount <= 0) {
+        return reply.status(400).send({ error: 'Amount must be a positive number' });
+      }
+      const result = await dbPool.query(
+        'UPDATE prices SET amount = $1, updated_at = NOW() WHERE key = $2 RETURNING *',
+        [amount, key],
+      );
+      if (result.rows.length === 0) {
+        return reply.status(404).send({ error: 'Price not found' });
+      }
+      return result.rows[0];
+    } catch (err) {
+      app.log.error(err, 'Failed to update price');
+      return reply.status(500).send({ error: 'Failed to save price' });
+    }
+  }
+);
+
+/** GET /api/prices/offers — all price offers */
+app.get(
+  '/api/prices/offers',
+  { preHandler: [authenticate] },
+  async (_request, reply) => {
+    try {
+      const result = await dbPool.query('SELECT * FROM price_offers ORDER BY telegram_id, key');
+      return result.rows;
+    } catch (err) {
+      app.log.error(err, 'Failed to fetch offers');
+      return reply.status(500).send({ error: 'Failed to load offers' });
+    }
+  }
+);
+
+/** POST /api/prices/offers — create offers for a user (copies global prices) */
+app.post<{ Body: { telegram_id: string } }>(
+  '/api/prices/offers',
+  { preHandler: [authenticate] },
+  async (request, reply) => {
+    try {
+      const { telegram_id } = request.body;
+      if (!telegram_id) {
+        return reply.status(400).send({ error: 'telegram_id is required' });
+      }
+
+      // Check if offers already exist
+      const existing = await dbPool.query(
+        'SELECT 1 FROM price_offers WHERE telegram_id = $1 LIMIT 1',
+        [telegram_id],
+      );
+      if (existing.rows.length > 0) {
+        return reply.status(409).send({ error: 'Offers already exist for this user' });
+      }
+
+      // Copy global prices as offers
+      await dbPool.query(
+        `INSERT INTO price_offers (telegram_id, key, amount, currency, days, label)
+         SELECT $1, key, amount, currency, days, label FROM prices`,
+        [telegram_id],
+      );
+
+      return { success: true };
+    } catch (err) {
+      app.log.error(err, 'Failed to create offers');
+      return reply.status(500).send({ error: 'Failed to create offers' });
+    }
+  }
+);
+
+/** PUT /api/prices/offers/:id — update a single offer price */
+app.put<{ Params: { id: string }; Body: { amount: number } }>(
+  '/api/prices/offers/:id',
+  { preHandler: [authenticate] },
+  async (request, reply) => {
+    try {
+      const { id } = request.params;
+      const amount = (request.body as { amount?: number })?.amount;
+      if (typeof amount !== 'number' || amount <= 0) {
+        return reply.status(400).send({ error: 'Amount must be a positive number' });
+      }
+      const result = await dbPool.query(
+        'UPDATE price_offers SET amount = $1 WHERE id = $2 RETURNING *',
+        [amount, id],
+      );
+      if (result.rows.length === 0) {
+        return reply.status(404).send({ error: 'Offer not found' });
+      }
+      return result.rows[0];
+    } catch (err) {
+      app.log.error(err, 'Failed to update offer');
+      return reply.status(500).send({ error: 'Failed to save offer' });
+    }
+  }
+);
+
+/** DELETE /api/prices/offers/user/:telegramId — delete all offers for a user */
+app.delete<{ Params: { telegramId: string } }>(
+  '/api/prices/offers/user/:telegramId',
+  { preHandler: [authenticate] },
+  async (request, reply) => {
+    try {
+      await dbPool.query('DELETE FROM price_offers WHERE telegram_id = $1', [request.params.telegramId]);
+      return { success: true };
+    } catch (err) {
+      app.log.error(err, 'Failed to delete offers');
+      return reply.status(500).send({ error: 'Failed to delete offers' });
+    }
+  }
+);
+
+/* ---------- Subscriptions API ---------- */
+
+/** GET /api/subscriptions — paginated subscription list with search and status filter */
+app.get<{
+  Querystring: { page?: string; limit?: string; search?: string; filter?: string };
+}>(
+  '/api/subscriptions',
+  { preHandler: [authenticate] },
+  async (request, reply) => {
+    try {
+      const page = Math.max(1, Number(request.query.page) || 1);
+      const limit = Math.min(100, Math.max(1, Number(request.query.limit) || 20));
+      const offset = (page - 1) * limit;
+      const searchRaw = (request.query.search ?? '').trim();
+      const search = searchRaw.replace(/[%_\\]/g, '\\$&');
+      const filter = request.query.filter ?? 'all'; // all | Active | Expired | Cancelled
+
+      const conditions: string[] = [];
+      const params: unknown[] = [];
+      let paramIndex = 1;
+
+      if (search) {
+        conditions.push(
+          `(s.telegram_id::text ILIKE $${paramIndex} OR u.username ILIKE $${paramIndex} OR u.first_name ILIKE $${paramIndex} OR u.last_name ILIKE $${paramIndex})`
+        );
+        params.push(`%${search}%`);
+        paramIndex += 1;
+      }
+
+      if (filter !== 'all') {
+        conditions.push(`s.status = $${paramIndex}`);
+        params.push(filter);
+        paramIndex += 1;
+      }
+
+      const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+      // Counts per status (with search applied)
+      const searchConditions: string[] = [];
+      const searchParams: unknown[] = [];
+      if (search) {
+        searchConditions.push(
+          `(s.telegram_id::text ILIKE $1 OR u.username ILIKE $1 OR u.first_name ILIKE $1 OR u.last_name ILIKE $1)`
+        );
+        searchParams.push(`%${search}%`);
+      }
+      const searchWhere = searchConditions.length > 0 ? `WHERE ${searchConditions.join(' AND ')}` : '';
+
+      const countsResult = await dbPool.query(
+        `SELECT
+           COUNT(*) AS total_all,
+           COUNT(*) FILTER (WHERE s.status = 'Active') AS total_active,
+           COUNT(*) FILTER (WHERE s.status = 'Expired') AS total_expired,
+           COUNT(*) FILTER (WHERE s.status = 'Cancelled') AS total_cancelled
+         FROM subscriptions s
+         LEFT JOIN users u ON u.telegram_id = s.telegram_id
+         ${searchWhere}`,
+        searchParams,
+      );
+      const counts = {
+        all: Number(countsResult.rows[0].total_all),
+        Active: Number(countsResult.rows[0].total_active),
+        Expired: Number(countsResult.rows[0].total_expired),
+        Cancelled: Number(countsResult.rows[0].total_cancelled),
+      };
+
+      const countResult = await dbPool.query(
+        `SELECT COUNT(*) FROM subscriptions s LEFT JOIN users u ON u.telegram_id = s.telegram_id ${where}`,
+        params,
+      );
+      const total = Number(countResult.rows[0].count);
+
+      const dataResult = await dbPool.query(
+        `SELECT s.id, s.telegram_id, s.plan, s.type, s.status,
+                s.started_at, s.expires_at, s.created_at,
+                u.username, u.first_name, u.last_name
+         FROM subscriptions s
+         LEFT JOIN users u ON u.telegram_id = s.telegram_id
+         ${where}
+         ORDER BY s.created_at DESC
+         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+        [...params, limit, offset],
+      );
+
+      return {
+        subscriptions: dataResult.rows,
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+        counts,
+      };
+    } catch (err) {
+      app.log.error(err, 'Failed to fetch subscriptions');
+      return reply.status(500).send({ error: 'Failed to load subscriptions' });
+    }
+  }
+);
+
+/* ---------- Transactions API ---------- */
+
+/** GET /api/transactions — paginated transaction list with search and status filter */
+app.get<{
+  Querystring: { page?: string; limit?: string; search?: string; filter?: string };
+}>(
+  '/api/transactions',
+  { preHandler: [authenticate] },
+  async (request, reply) => {
+    try {
+      const page = Math.max(1, Number(request.query.page) || 1);
+      const limit = Math.min(100, Math.max(1, Number(request.query.limit) || 20));
+      const offset = (page - 1) * limit;
+      const searchRaw = (request.query.search ?? '').trim();
+      const search = searchRaw.replace(/[%_\\]/g, '\\$&');
+      const filter = request.query.filter ?? 'all';
+
+      const conditions: string[] = [];
+      const params: unknown[] = [];
+      let paramIndex = 1;
+
+      if (search) {
+        conditions.push(
+          `(t.telegram_id::text ILIKE $${paramIndex} OR t.order_reference ILIKE $${paramIndex} OR t.tx_hash ILIKE $${paramIndex} OR u.username ILIKE $${paramIndex} OR u.first_name ILIKE $${paramIndex})`
+        );
+        params.push(`%${search}%`);
+        paramIndex += 1;
+      }
+
+      if (filter !== 'all') {
+        conditions.push(`t.status = $${paramIndex}`);
+        params.push(filter);
+        paramIndex += 1;
+      }
+
+      const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+      // Counts per status (with search applied)
+      const searchConditions: string[] = [];
+      const searchParams: unknown[] = [];
+      if (search) {
+        searchConditions.push(
+          `(t.telegram_id::text ILIKE $1 OR t.order_reference ILIKE $1 OR t.tx_hash ILIKE $1 OR u.username ILIKE $1 OR u.first_name ILIKE $1)`
+        );
+        searchParams.push(`%${search}%`);
+      }
+      const searchWhere = searchConditions.length > 0 ? `WHERE ${searchConditions.join(' AND ')}` : '';
+
+      const countsResult = await dbPool.query(
+        `SELECT
+           COUNT(*) AS total_all,
+           COUNT(*) FILTER (WHERE t.status = 'Approved') AS total_approved,
+           COUNT(*) FILTER (WHERE t.status = 'Pending') AS total_pending,
+           COUNT(*) FILTER (WHERE t.status = 'Declined') AS total_declined,
+           COUNT(*) FILTER (WHERE t.status = 'WaitingConfirmation') AS total_waiting,
+           COUNT(*) FILTER (WHERE t.status NOT IN ('Approved', 'Pending', 'Declined', 'WaitingConfirmation')) AS total_other
+         FROM transactions t
+         LEFT JOIN users u ON u.telegram_id = t.telegram_id
+         ${searchWhere}`,
+        searchParams,
+      );
+      const counts = {
+        all: Number(countsResult.rows[0].total_all),
+        Approved: Number(countsResult.rows[0].total_approved),
+        Pending: Number(countsResult.rows[0].total_pending),
+        Declined: Number(countsResult.rows[0].total_declined),
+        WaitingConfirmation: Number(countsResult.rows[0].total_waiting),
+        other: Number(countsResult.rows[0].total_other),
+      };
+
+      const countResult = await dbPool.query(
+        `SELECT COUNT(*) FROM transactions t LEFT JOIN users u ON u.telegram_id = t.telegram_id ${where}`,
+        params,
+      );
+      const total = Number(countResult.rows[0].count);
+
+      const dataResult = await dbPool.query(
+        `SELECT t.id, t.telegram_id, t.amount, t.currency, t.method, t.plan,
+                t.status, t.order_reference, t.card_pan, t.tx_hash, t.created_at,
+                u.username, u.first_name, u.last_name
+         FROM transactions t
+         LEFT JOIN users u ON u.telegram_id = t.telegram_id
+         ${where}
+         ORDER BY t.created_at DESC
+         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+        [...params, limit, offset],
+      );
+
+      return {
+        transactions: dataResult.rows,
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+        counts,
+      };
+    } catch (err) {
+      app.log.error(err, 'Failed to fetch transactions');
+      return reply.status(500).send({ error: 'Failed to load transactions' });
+    }
+  }
+);
+
+/* ---------- Texts API ---------- */
 
 /** Path to bot texts JSON file */
 const TEXTS_FILE = join(__dirname, '..', 'src', 'texts', 'texts.json');
@@ -229,7 +575,7 @@ app.put<{ Params: { key: string }; Body: { value: string } }>(
   async (request, reply) => {
     try {
       const { key } = request.params;
-      const { value } = request.body;
+      const value = (request.body as { value?: string })?.value;
 
       if (typeof value !== 'string') {
         return reply.status(400).send({ error: 'Value must be a string' });
@@ -248,6 +594,27 @@ app.put<{ Params: { key: string }; Body: { value: string } }>(
     } catch (err) {
       app.log.error(err, 'Failed to update text');
       return reply.status(500).send({ error: 'Failed to save text' });
+    }
+  }
+);
+
+/** POST /api/texts/apply — tell the bot to reload texts from file */
+app.post(
+  '/api/texts/apply',
+  { preHandler: [authenticate] },
+  async (_request, reply) => {
+    const botWebhookPort = process.env.WEBHOOK_PORT ?? '3001';
+    try {
+      const res = await fetch(`http://127.0.0.1:${botWebhookPort}/internal/reload-texts`, {
+        method: 'POST',
+      });
+      if (!res.ok) {
+        return reply.status(502).send({ error: 'Bot failed to reload texts' });
+      }
+      return { success: true };
+    } catch (err) {
+      app.log.error(err, 'Failed to reach bot for text reload');
+      return reply.status(502).send({ error: 'Cannot reach bot server' });
     }
   }
 );

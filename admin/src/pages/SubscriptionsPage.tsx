@@ -1,28 +1,29 @@
 import { useState, useEffect, useCallback } from 'react';
 
-interface User {
+interface Subscription {
   id: number;
   telegram_id: number;
+  plan: string;
+  type: string;
+  status: string;
+  started_at: string;
+  expires_at: string;
+  created_at: string;
   username: string | null;
   first_name: string | null;
   last_name: string | null;
-  email: string | null;
-  is_subscribed: boolean;
-  subscribed_at: string | null;
-  expires_at: string | null;
-  created_at: string;
 }
 
-interface UsersResponse {
-  users: User[];
+interface SubscriptionsResponse {
+  subscriptions: Subscription[];
   total: number;
   page: number;
   limit: number;
   totalPages: number;
-  counts: { all: number; active: number; inactive: number };
+  counts: { all: number; Active: number; Expired: number; Cancelled: number };
 }
 
-type Filter = 'all' | 'active' | 'inactive';
+type Filter = 'all' | 'Active' | 'Expired' | 'Cancelled';
 
 function SearchIcon() {
   return (
@@ -43,43 +44,59 @@ function formatDate(dateStr: string | null): string {
   });
 }
 
-function isSubscriptionActive(user: User): boolean {
-  return user.is_subscribed;
+function formatDateTime(dateStr: string | null): string {
+  if (!dateStr) return '—';
+  return new Date(dateStr).toLocaleString('uk-UA', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
-export function UsersPage() {
-  const [users, setUsers] = useState<User[]>([]);
+const STATUS_STYLES: Record<string, string> = {
+  Active: 'bg-green-100 text-green-700',
+  Expired: 'bg-gray-100 text-gray-500',
+  Cancelled: 'bg-red-100 text-red-600',
+};
+
+const PLAN_LABELS: Record<string, string> = {
+  card_1m: '1 month (card)',
+  card_6m: '6 months (card)',
+  card_12m: '12 months (card)',
+  crypto_1m: '1 month (crypto)',
+  crypto_6m: '6 months (crypto)',
+  crypto_12m: '12 months (crypto)',
+};
+
+export function SubscriptionsPage() {
+  const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
-  const [counts, setCounts] = useState<{ all: number; active: number; inactive: number }>({ all: 0, active: 0, inactive: 0 });
+  const [counts, setCounts] = useState<SubscriptionsResponse['counts']>({ all: 0, Active: 0, Expired: 0, Cancelled: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const fetchUsers = useCallback(async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true);
     setError('');
     const token = localStorage.getItem('admin_token');
 
     try {
-      const params = new URLSearchParams({
-        page: String(page),
-        limit: '20',
-        filter,
-      });
-      if (search.trim()) {
-        params.set('search', search.trim());
-      }
+      const params = new URLSearchParams({ page: String(page), limit: '20', filter });
+      if (search.trim()) params.set('search', search.trim());
 
-      const res = await fetch(`/api/users?${params}`, {
+      const res = await fetch(`/api/subscriptions?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!res.ok) throw new Error('Failed to load users');
+      if (!res.ok) throw new Error('Failed to load subscriptions');
 
-      const data: UsersResponse = await res.json();
-      setUsers(data.users);
+      const data: SubscriptionsResponse = await res.json();
+      setSubscriptions(data.subscriptions);
       setTotal(data.total);
       setTotalPages(data.totalPages);
       setCounts(data.counts);
@@ -90,26 +107,21 @@ export function UsersPage() {
     }
   }, [page, search, filter]);
 
-  useEffect(() => {
-    fetchUsers();
-  }, [fetchUsers]);
-
-  // Reset to page 1 when search or filter changes
-  useEffect(() => {
-    setPage(1);
-  }, [search, filter]);
+  useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => { setPage(1); }, [search, filter]);
 
   const filterButtons: { key: Filter; label: string }[] = [
     { key: 'all', label: `All (${counts.all})` },
-    { key: 'active', label: `Active (${counts.active})` },
-    { key: 'inactive', label: `Inactive (${counts.inactive})` },
+    { key: 'Active', label: `Active (${counts.Active})` },
+    { key: 'Expired', label: `Expired (${counts.Expired})` },
+    { key: 'Cancelled', label: `Cancelled (${counts.Cancelled})` },
   ];
 
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-bold text-gray-900">Users</h2>
-        <span className="text-sm text-gray-500">{total} users total</span>
+        <h2 className="text-2xl font-bold text-gray-900">Subscriptions</h2>
+        <span className="text-sm text-gray-500">{total} subscriptions total</span>
       </div>
 
       {/* Search */}
@@ -121,7 +133,7 @@ export function UsersPage() {
           type="text"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by username, name or Telegram ID..."
+          placeholder="Search by Telegram ID, username or name..."
           className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg
                      focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent
                      transition-colors"
@@ -129,7 +141,7 @@ export function UsersPage() {
       </div>
 
       {/* Filter buttons */}
-      <div className="flex gap-2 mb-6">
+      <div className="flex gap-2 mb-6 flex-wrap">
         {filterButtons.map((btn) => (
           <button
             key={btn.key}
@@ -145,70 +157,52 @@ export function UsersPage() {
         ))}
       </div>
 
-      {/* Error */}
       {error && <p className="text-red-600 mb-4">{error}</p>}
 
-      {/* Loading */}
       {loading ? (
         <p className="text-gray-500">Loading...</p>
-      ) : users.length === 0 ? (
+      ) : subscriptions.length === 0 ? (
         <div className="text-center py-16">
-          <div className="text-gray-300 mb-3">
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
-                 stroke="currentColor" strokeWidth={1.5} className="w-12 h-12 mx-auto">
-              <path strokeLinecap="round" strokeLinejoin="round"
-                    d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
-            </svg>
-          </div>
-          <p className="text-gray-500 font-medium">No users found</p>
-          {search && (
-            <p className="text-gray-400 text-sm mt-1">
-              No users matching "<span className="font-medium">{search}</span>"
-            </p>
-          )}
+          <p className="text-gray-500 font-medium">No subscriptions found</p>
         </div>
       ) : (
         <>
-          {/* Table */}
           <div className="overflow-x-auto border border-gray-200 rounded-lg">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-gray-600 text-left">
                 <tr>
-                  <th className="px-4 py-3 font-medium">User ID</th>
-                  <th className="px-4 py-3 font-medium">Telegram ID</th>
-                  <th className="px-4 py-3 font-medium">Username</th>
-                  <th className="px-4 py-3 font-medium">Name</th>
-                  <th className="px-4 py-3 font-medium">Email</th>
-                  <th className="px-4 py-3 font-medium">Subscription</th>
+                  <th className="px-4 py-3 font-medium">ID</th>
+                  <th className="px-4 py-3 font-medium">User</th>
+                  <th className="px-4 py-3 font-medium">Plan</th>
+                  <th className="px-4 py-3 font-medium">Type</th>
+                  <th className="px-4 py-3 font-medium">Status</th>
+                  <th className="px-4 py-3 font-medium">Started</th>
                   <th className="px-4 py-3 font-medium">Expires</th>
-                  <th className="px-4 py-3 font-medium">Registered</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {users.map((user) => {
-                  const active = isSubscriptionActive(user);
+                {subscriptions.map((sub) => {
+                  const userName = sub.username
+                    ? `@${sub.username}`
+                    : [sub.first_name, sub.last_name].filter(Boolean).join(' ') || String(sub.telegram_id);
                   return (
-                    <tr key={user.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-4 py-3 font-mono text-gray-400">{user.id}</td>
-                      <td className="px-4 py-3 font-mono text-gray-700">{user.telegram_id}</td>
+                    <tr key={sub.id} className="hover:bg-gray-50 transition-colors">
+                      <td className="px-4 py-3 font-mono text-gray-400">{sub.id}</td>
                       <td className="px-4 py-3 text-gray-700">
-                        {user.username ? `@${user.username}` : '—'}
+                        <div>{userName}</div>
+                        <div className="text-xs text-gray-400 font-mono">{sub.telegram_id}</div>
                       </td>
-                      <td className="px-4 py-3 text-gray-700">
-                        {[user.first_name, user.last_name].filter(Boolean).join(' ') || '—'}
-                      </td>
-                      <td className="px-4 py-3 text-gray-700">{user.email || '—'}</td>
+                      <td className="px-4 py-3 text-gray-700">{PLAN_LABELS[sub.plan] ?? sub.plan}</td>
+                      <td className="px-4 py-3 text-gray-700 capitalize">{sub.type}</td>
                       <td className="px-4 py-3">
                         <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                          active
-                            ? 'bg-green-100 text-green-700'
-                            : 'bg-gray-100 text-gray-500'
+                          STATUS_STYLES[sub.status] ?? 'bg-gray-100 text-gray-500'
                         }`}>
-                          {active ? 'Active' : 'Inactive'}
+                          {sub.status}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-gray-500">{formatDate(user.expires_at)}</td>
-                      <td className="px-4 py-3 text-gray-500">{formatDate(user.created_at)}</td>
+                      <td className="px-4 py-3 text-gray-500">{formatDate(sub.started_at)}</td>
+                      <td className="px-4 py-3 text-gray-500">{formatDate(sub.expires_at)}</td>
                     </tr>
                   );
                 })}

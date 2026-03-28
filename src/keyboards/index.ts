@@ -1,4 +1,5 @@
 import { TEXTS } from '../texts/index.js';
+import type { PricesSnapshot } from '../services/pricing.js';
 
 /** Main menu keyboard shown after /start */
 export const MAIN_MENU_KEYBOARD = {
@@ -9,39 +10,33 @@ export const MAIN_MENU_KEYBOARD = {
   resize_keyboard: true,
 };
 
-/** Payment method selection keyboard */
-export const PAYMENT_KEYBOARD = {
-  keyboard: [
-    [{ text: TEXTS.BTN_PAY_CARD }],
-    [{ text: TEXTS.BTN_PAY_USDT }],
-    [{ text: TEXTS.BTN_HOME }],
-  ],
-  resize_keyboard: true,
-};
+/** Format price safely — returns '?' if price key is missing */
+function price(prices: PricesSnapshot, key: string): number | string {
+  return prices[key]?.amount ?? '?';
+}
 
-/** Card tariff selection keyboard */
-export const CARD_TARIFF_KEYBOARD = {
-  keyboard: [
-    [{ text: TEXTS.BTN_CARD_1M }],
-    [{ text: TEXTS.BTN_CARD_6M }],
-    [{ text: TEXTS.BTN_CARD_12M }],
-    [{ text: TEXTS.BTN_CHANGE_PAYMENT }],
-    [{ text: TEXTS.BTN_HOME }],
-  ],
-  resize_keyboard: true,
-};
+/** Build inline keyboard: tariff selection with dynamic prices (step 1) */
+export function buildTariffKeyboard(prices: PricesSnapshot) {
+  return {
+    inline_keyboard: [
+      [{ text: `🏆 12 місяців — ${price(prices, 'card_12m')} грн / ${price(prices, 'crypto_12m')} USDT`, callback_data: 'tariff:12m' }],
+      [{ text: `🎩 6 місяців — ${price(prices, 'card_6m')} грн / ${price(prices, 'crypto_6m')} USDT`, callback_data: 'tariff:6m' }],
+      [{ text: `🌂 1 місяць — ${price(prices, 'card_1m')} грн / ${price(prices, 'crypto_1m')} USDT`, callback_data: 'tariff:1m' }],
+      [{ text: TEXTS.BTN_BACK, callback_data: 'back:main' }],
+    ],
+  };
+}
 
-/** USDT tariff selection keyboard */
-export const USDT_TARIFF_KEYBOARD = {
-  keyboard: [
-    [{ text: TEXTS.BTN_USDT_1M }],
-    [{ text: TEXTS.BTN_USDT_6M }],
-    [{ text: TEXTS.BTN_USDT_12M }],
-    [{ text: TEXTS.BTN_CHANGE_PAYMENT }],
-    [{ text: TEXTS.BTN_HOME }],
-  ],
-  resize_keyboard: true,
-};
+/** Build inline keyboard: payment method selection (step 2) */
+export function paymentMethodKeyboard(duration: string) {
+  return {
+    inline_keyboard: [
+      [{ text: TEXTS.BTN_PAY_CARD, callback_data: `pay:card:${duration}` }],
+      [{ text: TEXTS.BTN_PAY_USDT, callback_data: `pay:usdt:${duration}` }],
+      [{ text: TEXTS.BTN_BACK_TARIFFS, callback_data: 'back:tariffs' }],
+    ],
+  };
+}
 
 /** Back button keyboard for sub-sections */
 export const BACK_KEYBOARD = {

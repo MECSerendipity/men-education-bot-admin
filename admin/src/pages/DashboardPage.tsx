@@ -1,9 +1,12 @@
 import { useState } from 'react';
 import { Sidebar, Page } from '../components/Sidebar';
 import { UsersPage } from './UsersPage';
+import { SubscriptionsPage } from './SubscriptionsPage';
+import { TransactionsPage } from './TransactionsPage';
 import { StatisticsPage } from './StatisticsPage';
 import { BroadcastPage } from './BroadcastPage';
 import { TextsPage } from './TextsPage';
+import { PricesPage } from './PricesPage';
 
 interface DashboardPageProps {
   onLogout: () => void;
@@ -14,6 +17,12 @@ function PageContent({ page }: { page: Page }) {
   switch (page) {
     case 'users':
       return <UsersPage />;
+    case 'subscriptions':
+      return <SubscriptionsPage />;
+    case 'transactions':
+      return <TransactionsPage />;
+    case 'prices':
+      return <PricesPage />;
     case 'statistics':
       return <StatisticsPage />;
     case 'broadcast':
