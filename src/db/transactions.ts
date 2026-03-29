@@ -13,6 +13,7 @@ export interface Transaction {
   rec_token: string | null;
   card_pan: string | null;
   tx_hash: string | null;
+  subscription_id: number | null;
   created_at: Date;
 }
 

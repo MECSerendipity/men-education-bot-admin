@@ -49,7 +49,14 @@ async function handleAdminDecision(
   if (approved) {
     const days = daysFromPlanKey(payment.plan);
     const prices = await getPricesForUser(payment.telegram_id);
-    await activateSubscription(payment.telegram_id, payment.plan, 'crypto', days, payment.id, prices);
+    await activateSubscription({
+      telegramId: payment.telegram_id,
+      plan: payment.plan,
+      method: 'crypto',
+      days,
+      transactionId: payment.id,
+      prices,
+    });
     await deleteOffersForUser(payment.telegram_id);
 
     try {

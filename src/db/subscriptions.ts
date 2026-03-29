@@ -5,12 +5,13 @@ export interface Subscription {
   user_id: number;
   telegram_id: number;
   plan: string;
-  type: string; // card, crypto
-  status: string; // active, expired
+  method: string; // card, crypto
+  status: string; // Active, Expired
+  card_pan: string | null;
+  rec_token: string | null;
   prices: Record<string, unknown> | null; // JSONB snapshot of prices at payment time
   started_at: Date;
   expires_at: Date;
-  transaction_id: number | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -46,14 +47,17 @@ export async function getActiveSubscription(telegramId: number): Promise<Subscri
  * One subscription per user: if active — extend expires_at, otherwise create new.
  * Wrapped in a DB transaction to avoid partial state.
  */
-export async function activateSubscription(
-  telegramId: number,
-  plan: string,
-  type: string,
-  days: number,
-  transactionId: number | null,
-  prices: Record<string, unknown>,
-): Promise<Subscription> {
+export async function activateSubscription(params: {
+  telegramId: number;
+  plan: string;
+  method: string;
+  days: number;
+  transactionId: number | null;
+  prices: Record<string, unknown>;
+  cardPan?: string | null;
+  recToken?: string | null;
+}): Promise<Subscription> {
+  const { telegramId, plan, method, days, transactionId, prices, cardPan, recToken } = params;
   const client = await db.pool.connect();
   try {
     await client.query('BEGIN');
@@ -65,37 +69,38 @@ export async function activateSubscription(
       [telegramId],
     );
     const existing: Subscription | undefined = existingResult.rows[0];
-    const now = new Date();
 
     let result;
 
     if (existing) {
       // Extend existing subscription
-      const baseDate = new Date(existing.expires_at);
-      const expiresAt = new Date(baseDate);
-      expiresAt.setDate(expiresAt.getDate() + days);
-
       result = await client.query(
         `UPDATE subscriptions
-         SET expires_at = $1, plan = $2, type = $3,
-             prices = $4, transaction_id = $5, updated_at = NOW()
-         WHERE id = $6
+         SET expires_at = expires_at + make_interval(days => $1), plan = $2, method = $3,
+             prices = $4, card_pan = COALESCE($5, card_pan),
+             rec_token = COALESCE($6, rec_token), updated_at = NOW()
+         WHERE id = $7
          RETURNING *`,
-        [expiresAt, plan, type, JSON.stringify(prices), transactionId, existing.id],
+        [days, plan, method, JSON.stringify(prices), cardPan ?? null, recToken ?? null, existing.id],
       );
     } else {
       // Create new subscription
-      const expiresAt = new Date(now);
-      expiresAt.setDate(expiresAt.getDate() + days);
-
       result = await client.query(
-        `INSERT INTO subscriptions (user_id, telegram_id, plan, type, status, prices, started_at, expires_at, transaction_id)
+        `INSERT INTO subscriptions (user_id, telegram_id, plan, method, status, prices, card_pan, rec_token, started_at, expires_at)
          VALUES (
            (SELECT id FROM users WHERE telegram_id = $1),
-           $1, $2, $3, 'Active', $4, NOW(), $5, $6
+           $1, $2, $3, 'Active', $4, $5, $6, NOW(), NOW() + make_interval(days => $7)
          )
          RETURNING *`,
-        [telegramId, plan, type, JSON.stringify(prices), expiresAt, transactionId],
+        [telegramId, plan, method, JSON.stringify(prices), cardPan ?? null, recToken ?? null, days],
+      );
+    }
+
+    // Link transaction to this subscription
+    if (transactionId) {
+      await client.query(
+        'UPDATE transactions SET subscription_id = $1 WHERE id = $2',
+        [result.rows[0].id, transactionId],
       );
     }
 

@@ -26,13 +26,13 @@ export async function migrate() {
       user_id         INTEGER REFERENCES users(id),
       telegram_id     BIGINT NOT NULL,
       plan            VARCHAR(20) NOT NULL,
-      type            VARCHAR(20) NOT NULL DEFAULT 'card',
+      method          VARCHAR(20) NOT NULL DEFAULT 'card',
       status          VARCHAR(20) DEFAULT 'Active',
       started_at      TIMESTAMPTZ DEFAULT NOW(),
       expires_at      TIMESTAMPTZ NOT NULL,
-      auto_renew      BOOLEAN DEFAULT FALSE,
+      card_pan        VARCHAR(20),
+      rec_token       VARCHAR(255),
       prices          JSONB,
-      transaction_id  INTEGER,
       created_at      TIMESTAMPTZ DEFAULT NOW(),
       updated_at      TIMESTAMPTZ DEFAULT NOW()
     );
@@ -53,6 +53,7 @@ export async function migrate() {
       rec_token       VARCHAR(255),
       card_pan        VARCHAR(20),
       tx_hash         VARCHAR(255),
+      subscription_id INTEGER REFERENCES subscriptions(id),
       created_at      TIMESTAMPTZ DEFAULT NOW()
     );
   `);
@@ -63,8 +64,7 @@ export async function migrate() {
       key             VARCHAR(20) PRIMARY KEY,
       amount          DECIMAL(10,2) NOT NULL,
       currency        VARCHAR(10) NOT NULL,
-      days          INTEGER NOT NULL,
-      label           VARCHAR(255) NOT NULL,
+      days            INTEGER NOT NULL,
       updated_at      TIMESTAMPTZ DEFAULT NOW()
     );
   `);
@@ -77,8 +77,7 @@ export async function migrate() {
       key             VARCHAR(20) NOT NULL,
       amount          DECIMAL(10,2) NOT NULL,
       currency        VARCHAR(10) NOT NULL,
-      days          INTEGER NOT NULL,
-      label           VARCHAR(255) NOT NULL,
+      days            INTEGER NOT NULL,
       created_at      TIMESTAMPTZ DEFAULT NOW(),
       UNIQUE(telegram_id, key)
     );
@@ -86,13 +85,13 @@ export async function migrate() {
 
   // Seed default prices (only inserts if not already present)
   await db.query(`
-    INSERT INTO prices (key, amount, currency, days, label) VALUES
-      ('card_1m',    790,  'UAH',  30,  'Підписка ME Club — 1 місяць'),
-      ('card_6m',    3850, 'UAH',  180, 'Підписка ME Club — 6 місяців'),
-      ('card_12m',   6500, 'UAH',  365, 'Підписка ME Club — 12 місяців'),
-      ('crypto_1m',  18,   'USDT', 30,  'Підписка ME Club — 1 місяць'),
-      ('crypto_6m',  90,   'USDT', 180, 'Підписка ME Club — 6 місяців'),
-      ('crypto_12m', 150,  'USDT', 365, 'Підписка ME Club — 12 місяців')
+    INSERT INTO prices (key, amount, currency, days) VALUES
+      ('card_1m',    790,  'UAH',  30),
+      ('card_6m',    3850, 'UAH',  180),
+      ('card_12m',   6500, 'UAH',  365),
+      ('crypto_1m',  18,   'USDT', 30),
+      ('crypto_6m',  90,   'USDT', 180),
+      ('crypto_12m', 150,  'USDT', 365)
     ON CONFLICT (key) DO NOTHING;
   `);
 
@@ -105,23 +104,12 @@ export async function migrate() {
     );
   `);
 
-  // ── normalize statuses to PascalCase ──
-  await db.query(`ALTER TABLE transactions ALTER COLUMN status SET DEFAULT 'Pending'`);
-  await db.query(`ALTER TABLE subscriptions ALTER COLUMN status SET DEFAULT 'Active'`);
-  await db.query(`UPDATE transactions SET status = 'Pending' WHERE status = 'pending'`);
-  await db.query(`UPDATE transactions SET status = 'Approved' WHERE status = 'approved'`);
-  await db.query(`UPDATE transactions SET status = 'Declined' WHERE status = 'declined'`);
-  await db.query(`UPDATE transactions SET status = 'Expired' WHERE status = 'expired'`);
-  await db.query(`UPDATE transactions SET status = 'Cancelled' WHERE status = 'cancelled'`);
-  await db.query(`UPDATE transactions SET status = 'WaitingConfirmation' WHERE status = 'waiting_confirmation'`);
-  await db.query(`UPDATE subscriptions SET status = 'Active' WHERE status = 'active'`);
-  await db.query(`UPDATE subscriptions SET status = 'Expired' WHERE status = 'expired'`);
-
   // ── indexes ──
   await db.query(`CREATE INDEX IF NOT EXISTS idx_subscriptions_telegram_id ON subscriptions (telegram_id)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_transactions_telegram_id ON transactions (telegram_id)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_price_offers_telegram_id ON price_offers (telegram_id)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_subscriptions_active ON subscriptions (telegram_id) WHERE status = 'Active'`);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_transactions_subscription_id ON transactions (subscription_id)`);
 
   logger.info('Database migrated');
 }

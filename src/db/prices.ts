@@ -5,7 +5,6 @@ export interface PriceRow {
   amount: number;
   currency: string;
   days: number;
-  label: string;
 }
 
 /** Get all global prices as a map keyed by plan key */
@@ -18,7 +17,6 @@ export async function getGlobalPrices(): Promise<Record<string, PriceRow>> {
       amount: Number(row.amount),
       currency: row.currency,
       days: row.days,
-      label: row.label,
     };
   }
   return map;
@@ -39,7 +37,6 @@ export async function getOffersForUser(telegramId: number): Promise<Record<strin
       amount: Number(row.amount),
       currency: row.currency,
       days: row.days,
-      label: row.label,
     };
   }
   return map;
@@ -65,16 +62,14 @@ export async function upsertOfferForUser(
   amount: number,
   currency: string,
   days: number,
-  label: string,
 ): Promise<void> {
   await db.query(
-    `INSERT INTO price_offers (telegram_id, key, amount, currency, days, label)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO price_offers (telegram_id, key, amount, currency, days)
+     VALUES ($1, $2, $3, $4, $5)
      ON CONFLICT (telegram_id, key) DO UPDATE SET
        amount = EXCLUDED.amount,
        currency = EXCLUDED.currency,
-       days = EXCLUDED.days,
-       label = EXCLUDED.label`,
-    [telegramId, key, amount, currency, days, label],
+       days = EXCLUDED.days`,
+    [telegramId, key, amount, currency, days],
   );
 }

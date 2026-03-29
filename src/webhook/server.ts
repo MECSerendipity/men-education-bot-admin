@@ -4,7 +4,7 @@ import { logger } from '../utils/logger.js';
 import { buildPaymentPage, generateCallbackSignature, generateResponseSignature } from '../services/wayforpay.js';
 import { getTransactionByOrderReference, updateTransactionStatus, updateTransactionCard } from '../db/transactions.js';
 import { activateSubscription } from '../db/subscriptions.js';
-import { getPricesForUser, daysFromPlanKey } from '../services/pricing.js';
+import { getPricesForUser, daysFromPlanKey, planLabel } from '../services/pricing.js';
 import { getGlobalPrices, deleteOffersForUser } from '../db/prices.js';
 import { sendRulesOrInvite } from '../handlers/rules.js';
 import { reloadTexts } from '../texts/index.js';
@@ -65,7 +65,7 @@ async function handlePayPage(orderReference: string, res: ServerResponse): Promi
   // Get product name from global prices
   const globalPrices = await getGlobalPrices();
   const plan = globalPrices[payment.plan];
-  const productName = plan?.label ?? 'Підписка ME Club';
+  const productName = planLabel(payment.plan);
   const orderDate = Math.floor(new Date(payment.created_at).getTime() / 1000);
 
   const html = buildPaymentPage({
@@ -200,18 +200,27 @@ async function handleCallback(req: IncomingMessage, res: ServerResponse, bot: Te
 
       // Get prices and activate subscription with snapshot
       const prices = await getPricesForUser(payment.telegram_id);
-      await activateSubscription(payment.telegram_id, payment.plan, 'card', days, payment.id, prices);
+      await activateSubscription({
+        telegramId: payment.telegram_id,
+        plan: payment.plan,
+        method: 'card',
+        days,
+        transactionId: payment.id,
+        prices,
+        cardPan,
+        recToken,
+      });
 
       // Delete price offers after successful payment
       await deleteOffersForUser(payment.telegram_id);
 
       // Notify user in Telegram
       try {
-        const planLabel = prices[payment.plan]?.label ?? 'Підписка ME Club';
+        const label = planLabel(payment.plan);
         await bot.telegram.sendMessage(
           payment.telegram_id,
           `✅ Оплата пройшла успішно!\n\n` +
-          `📦 ${planLabel}\n` +
+          `📦 ${label}\n` +
           `💰 ${payment.amount} ${payment.currency}\n` +
           `💳 ${cardPan ?? 'Картка'}\n\n` +
           `Дякуємо! Підписка активована 🎉`,

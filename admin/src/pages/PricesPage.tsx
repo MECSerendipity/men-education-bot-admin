@@ -5,7 +5,6 @@ interface PriceRow {
   amount: string;
   currency: string;
   days: number;
-  label: string;
 }
 
 interface PriceOffer {
@@ -15,7 +14,6 @@ interface PriceOffer {
   amount: string;
   currency: string;
   days: number;
-  label: string;
   created_at: string;
 }
 
@@ -384,7 +382,7 @@ export function PricesPage() {
                           <span className="text-sm text-gray-700">{planName(offer.key)}</span>
                         </div>
                         <PriceCell
-                          price={{ key: offer.key, amount: offer.amount, currency: offer.currency, days: offer.days, label: offer.label }}
+                          price={{ key: offer.key, amount: offer.amount, currency: offer.currency, days: offer.days }}
                           onSave={async (_key, amount) => handleSaveOffer(offer.id, amount)}
                         />
                       </div>

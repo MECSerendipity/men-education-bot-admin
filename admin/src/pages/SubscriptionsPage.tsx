@@ -4,8 +4,9 @@ interface Subscription {
   id: number;
   telegram_id: number;
   plan: string;
-  type: string;
+  method: string;
   status: string;
+  card_pan: string | null;
   started_at: string;
   expires_at: string;
   created_at: string;
@@ -59,6 +60,11 @@ const STATUS_STYLES: Record<string, string> = {
   Active: 'bg-green-100 text-green-700',
   Expired: 'bg-gray-100 text-gray-500',
   Cancelled: 'bg-red-100 text-red-600',
+};
+
+const METHOD_STYLES: Record<string, string> = {
+  card: 'bg-purple-100 text-purple-700',
+  crypto: 'bg-orange-100 text-orange-700',
 };
 
 const PLAN_LABELS: Record<string, string> = {
@@ -174,8 +180,9 @@ export function SubscriptionsPage() {
                   <th className="px-4 py-3 font-medium">ID</th>
                   <th className="px-4 py-3 font-medium">User</th>
                   <th className="px-4 py-3 font-medium">Plan</th>
-                  <th className="px-4 py-3 font-medium">Type</th>
+                  <th className="px-4 py-3 font-medium">Method</th>
                   <th className="px-4 py-3 font-medium">Status</th>
+                  <th className="px-4 py-3 font-medium">Card</th>
                   <th className="px-4 py-3 font-medium">Started</th>
                   <th className="px-4 py-3 font-medium">Expires</th>
                 </tr>
@@ -193,7 +200,13 @@ export function SubscriptionsPage() {
                         <div className="text-xs text-gray-400 font-mono">{sub.telegram_id}</div>
                       </td>
                       <td className="px-4 py-3 text-gray-700">{PLAN_LABELS[sub.plan] ?? sub.plan}</td>
-                      <td className="px-4 py-3 text-gray-700 capitalize">{sub.type}</td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                          METHOD_STYLES[sub.method] ?? 'bg-gray-100 text-gray-500'
+                        }`}>
+                          {sub.method}
+                        </span>
+                      </td>
                       <td className="px-4 py-3">
                         <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
                           STATUS_STYLES[sub.status] ?? 'bg-gray-100 text-gray-500'
@@ -201,6 +214,7 @@ export function SubscriptionsPage() {
                           {sub.status}
                         </span>
                       </td>
+                      <td className="px-4 py-3 text-gray-500 text-xs font-mono">{sub.card_pan ?? '—'}</td>
                       <td className="px-4 py-3 text-gray-500">{formatDate(sub.started_at)}</td>
                       <td className="px-4 py-3 text-gray-500">{formatDate(sub.expires_at)}</td>
                     </tr>

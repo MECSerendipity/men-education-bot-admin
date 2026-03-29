@@ -285,8 +285,8 @@ app.post<{ Body: { telegram_id: string } }>(
 
       // Copy global prices as offers
       await dbPool.query(
-        `INSERT INTO price_offers (telegram_id, key, amount, currency, days, label)
-         SELECT $1, key, amount, currency, days, label FROM prices`,
+        `INSERT INTO price_offers (telegram_id, key, amount, currency, days)
+         SELECT $1, key, amount, currency, days FROM prices`,
         [telegram_id],
       );
 
@@ -412,8 +412,8 @@ app.get<{
       const total = Number(countResult.rows[0].count);
 
       const dataResult = await dbPool.query(
-        `SELECT s.id, s.telegram_id, s.plan, s.type, s.status,
-                s.started_at, s.expires_at, s.created_at,
+        `SELECT s.id, s.telegram_id, s.plan, s.method, s.status,
+                s.card_pan, s.started_at, s.expires_at, s.created_at,
                 u.username, u.first_name, u.last_name
          FROM subscriptions s
          LEFT JOIN users u ON u.telegram_id = s.telegram_id

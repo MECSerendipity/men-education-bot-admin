@@ -5,6 +5,7 @@ import { getPricesForUser } from '../services/pricing.js';
 import { createTransaction, hasPendingCardTransaction } from '../db/transactions.js';
 import { logger } from '../utils/logger.js';
 import { generateOrderReference } from '../utils/order-reference.js';
+import { planLabel } from '../services/pricing.js';
 
 /** Map duration code to plan keys and detail text key */
 const DURATION_MAP: Record<string, { card: string; crypto: string; detailKey: keyof typeof TEXTS }> = {
@@ -61,7 +62,7 @@ async function handleCardPayment(ctx: Context, duration: string): Promise<void> 
     const paymentUrl = `${webhookBaseUrl}/pay/${orderReference}`;
 
     await ctx.reply(
-      `💳 Оплата: ${plan.label}\n💰 Сума: ${plan.amount} ${plan.currency}\n\nНатисни кнопку нижче для оплати 👇`,
+      `💳 Оплата: ${planLabel(info.card)}\n💰 Сума: ${plan.amount} ${plan.currency}\n\nНатисни кнопку нижче для оплати 👇`,
       {
         reply_markup: {
           inline_keyboard: [
