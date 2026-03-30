@@ -222,20 +222,38 @@ app.get(
   }
 );
 
-/** PUT /api/prices/:key — update a global price */
-app.put<{ Params: { key: string }; Body: { amount: number } }>(
+/** PUT /api/prices/:key — update a global price (amount and/or display_name) */
+app.put<{ Params: { key: string }; Body: { amount?: number; display_name?: string } }>(
   '/api/prices/:key',
   { preHandler: [authenticate] },
   async (request, reply) => {
     try {
       const { key } = request.params;
-      const amount = (request.body as { amount?: number })?.amount;
-      if (typeof amount !== 'number' || amount <= 0) {
-        return reply.status(400).send({ error: 'Amount must be a positive number' });
+      const body = request.body as { amount?: number; display_name?: string };
+
+      const updates: string[] = [];
+      const params: unknown[] = [];
+      let paramIndex = 1;
+
+      if (typeof body.amount === 'number') {
+        if (body.amount <= 0) return reply.status(400).send({ error: 'Amount must be a positive number' });
+        updates.push(`amount = $${paramIndex++}`);
+        params.push(body.amount);
       }
+      if (typeof body.display_name === 'string') {
+        if (!body.display_name.trim()) return reply.status(400).send({ error: 'Display name cannot be empty' });
+        updates.push(`display_name = $${paramIndex++}`);
+        params.push(body.display_name.trim());
+      }
+
+      if (updates.length === 0) return reply.status(400).send({ error: 'Nothing to update' });
+
+      updates.push('updated_at = NOW()');
+      params.push(key);
+
       const result = await dbPool.query(
-        'UPDATE prices SET amount = $1, updated_at = NOW() WHERE key = $2 RETURNING *',
-        [amount, key],
+        `UPDATE prices SET ${updates.join(', ')} WHERE key = $${paramIndex} RETURNING *`,
+        params,
       );
       if (result.rows.length === 0) {
         return reply.status(404).send({ error: 'Price not found' });
@@ -248,13 +266,13 @@ app.put<{ Params: { key: string }; Body: { amount: number } }>(
   }
 );
 
-/** GET /api/prices/offers — all price offers */
+/** GET /api/prices/offers — all price offer snapshots */
 app.get(
   '/api/prices/offers',
   { preHandler: [authenticate] },
   async (_request, reply) => {
     try {
-      const result = await dbPool.query('SELECT * FROM price_offers ORDER BY telegram_id, key');
+      const result = await dbPool.query('SELECT * FROM price_offers ORDER BY telegram_id');
       return result.rows;
     } catch (err) {
       app.log.error(err, 'Failed to fetch offers');
@@ -263,7 +281,7 @@ app.get(
   }
 );
 
-/** POST /api/prices/offers — create offers for a user (copies global prices) */
+/** POST /api/prices/offers — create offer snapshot for a user (copies global prices as JSONB) */
 app.post<{ Body: { telegram_id: string } }>(
   '/api/prices/offers',
   { preHandler: [authenticate] },
@@ -283,11 +301,22 @@ app.post<{ Body: { telegram_id: string } }>(
         return reply.status(409).send({ error: 'Offers already exist for this user' });
       }
 
-      // Copy global prices as offers
+      // Build JSONB snapshot from global prices
+      const pricesResult = await dbPool.query('SELECT key, display_name, amount, currency, days FROM prices');
+      const snapshot: Record<string, unknown> = {};
+      for (const row of pricesResult.rows) {
+        snapshot[row.key] = {
+          key: row.key,
+          display_name: row.display_name,
+          amount: Number(row.amount),
+          currency: row.currency,
+          days: row.days,
+        };
+      }
+
       await dbPool.query(
-        `INSERT INTO price_offers (telegram_id, key, amount, currency, days)
-         SELECT $1, key, amount, currency, days FROM prices`,
-        [telegram_id],
+        `INSERT INTO price_offers (telegram_id, prices) VALUES ($1, $2)`,
+        [telegram_id, JSON.stringify(snapshot)],
       );
 
       return { success: true };
@@ -298,20 +327,25 @@ app.post<{ Body: { telegram_id: string } }>(
   }
 );
 
-/** PUT /api/prices/offers/:id — update a single offer price */
-app.put<{ Params: { id: string }; Body: { amount: number } }>(
-  '/api/prices/offers/:id',
+/** PUT /api/prices/offers/:telegramId — update a price key within the JSONB snapshot */
+app.put<{ Params: { telegramId: string }; Body: { key: string; amount: number } }>(
+  '/api/prices/offers/:telegramId',
   { preHandler: [authenticate] },
   async (request, reply) => {
     try {
-      const { id } = request.params;
-      const amount = (request.body as { amount?: number })?.amount;
-      if (typeof amount !== 'number' || amount <= 0) {
-        return reply.status(400).send({ error: 'Amount must be a positive number' });
+      const { telegramId } = request.params;
+      const { key, amount } = request.body as { key?: string; amount?: number };
+      if (!key || typeof amount !== 'number' || amount <= 0) {
+        return reply.status(400).send({ error: 'key and positive amount are required' });
       }
+      // Update single key inside JSONB: prices->'card_1m'->'amount'
       const result = await dbPool.query(
-        'UPDATE price_offers SET amount = $1 WHERE id = $2 RETURNING *',
-        [amount, id],
+        `UPDATE price_offers
+         SET prices = jsonb_set(prices, ARRAY[$1, 'amount'], to_jsonb($2::numeric)),
+             updated_at = NOW()
+         WHERE telegram_id = $3
+         RETURNING *`,
+        [key, amount, telegramId],
       );
       if (result.rows.length === 0) {
         return reply.status(404).send({ error: 'Offer not found' });

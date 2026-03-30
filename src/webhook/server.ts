@@ -2,9 +2,9 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { Telegraf } from 'telegraf';
 import { logger } from '../utils/logger.js';
 import { buildPaymentPage, generateCallbackSignature, generateResponseSignature } from '../services/wayforpay.js';
-import { getTransactionByOrderReference, updateTransactionStatus, updateTransactionCard } from '../db/transactions.js';
+import { getTransactionByOrderReference, updateTransactionStatus, updateTransactionCard, claimTransaction } from '../db/transactions.js';
 import { activateSubscription } from '../db/subscriptions.js';
-import { getPricesForUser, daysFromPlanKey, planLabel } from '../services/pricing.js';
+import { getPricesForUser, daysFromPlanKey } from '../services/pricing.js';
 import { getGlobalPrices, deleteOffersForUser } from '../db/prices.js';
 import { sendRulesOrInvite } from '../handlers/rules.js';
 import { reloadTexts } from '../texts/index.js';
@@ -65,7 +65,7 @@ async function handlePayPage(orderReference: string, res: ServerResponse): Promi
   // Get product name from global prices
   const globalPrices = await getGlobalPrices();
   const plan = globalPrices[payment.plan];
-  const productName = planLabel(payment.plan);
+  const productName = plan?.display_name ?? 'Підписка ME Club';
   const orderDate = Math.floor(new Date(payment.created_at).getTime() / 1000);
 
   const html = buildPaymentPage({
@@ -190,7 +190,16 @@ async function handleCallback(req: IncomingMessage, res: ServerResponse, bot: Te
       return;
     }
 
-    await updateTransactionStatus(orderReference, transactionStatus);
+    // Atomically claim — prevents double-processing from WayForPay retries
+    const claimed = await claimTransaction(orderReference, 'Pending', transactionStatus);
+    if (!claimed) {
+      logger.info('Callback race: transaction already claimed, skipping', { orderReference });
+      const time = Math.floor(Date.now() / 1000);
+      const responseSignature = generateResponseSignature(orderReference, 'accept', time);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ orderReference, status: 'accept', time, signature: responseSignature }));
+      return;
+    }
 
     if (transactionStatus === 'Approved') {
       const days = daysFromPlanKey(payment.plan);
@@ -216,11 +225,11 @@ async function handleCallback(req: IncomingMessage, res: ServerResponse, bot: Te
 
       // Notify user in Telegram
       try {
-        const label = planLabel(payment.plan);
+        const displayName = prices[payment.plan]?.display_name ?? payment.plan;
         await bot.telegram.sendMessage(
           payment.telegram_id,
           `✅ Оплата пройшла успішно!\n\n` +
-          `📦 ${label}\n` +
+          `📦 ${displayName}\n` +
           `💰 ${payment.amount} ${payment.currency}\n` +
           `💳 ${cardPan ?? 'Картка'}\n\n` +
           `Дякуємо! Підписка активована 🎉`,

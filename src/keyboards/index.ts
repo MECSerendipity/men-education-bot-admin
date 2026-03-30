@@ -10,18 +10,21 @@ export const MAIN_MENU_KEYBOARD = {
   resize_keyboard: true,
 };
 
-/** Format price safely — returns '?' if price key is missing */
-function price(prices: PricesSnapshot, key: string): number | string {
-  return prices[key]?.amount ?? '?';
+/** Build tariff button text: "🎩 6 місяців — 3850 UAH / 90 USDT" */
+function tariffButton(prices: PricesSnapshot, cardKey: string, cryptoKey: string): string {
+  const card = prices[cardKey];
+  const crypto = prices[cryptoKey];
+  const name = card?.display_name ?? crypto?.display_name ?? '?';
+  return `${name} — ${card?.amount ?? '?'} ${card?.currency ?? 'UAH'} / ${crypto?.amount ?? '?'} ${crypto?.currency ?? 'USDT'}`;
 }
 
 /** Build inline keyboard: tariff selection with dynamic prices (step 1) */
 export function buildTariffKeyboard(prices: PricesSnapshot) {
   return {
     inline_keyboard: [
-      [{ text: `🏆 12 місяців — ${price(prices, 'card_12m')} грн / ${price(prices, 'crypto_12m')} USDT`, callback_data: 'tariff:12m' }],
-      [{ text: `🎩 6 місяців — ${price(prices, 'card_6m')} грн / ${price(prices, 'crypto_6m')} USDT`, callback_data: 'tariff:6m' }],
-      [{ text: `🌂 1 місяць — ${price(prices, 'card_1m')} грн / ${price(prices, 'crypto_1m')} USDT`, callback_data: 'tariff:1m' }],
+      [{ text: tariffButton(prices, 'card_12m', 'crypto_12m'), callback_data: 'tariff:12m' }],
+      [{ text: tariffButton(prices, 'card_6m', 'crypto_6m'), callback_data: 'tariff:6m' }],
+      [{ text: tariffButton(prices, 'card_1m', 'crypto_1m'), callback_data: 'tariff:1m' }],
       [{ text: TEXTS.BTN_BACK, callback_data: 'back:main' }],
     ],
   };

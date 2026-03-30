@@ -1,6 +1,6 @@
 import { Telegraf, type Context } from 'telegraf';
 import { TEXTS } from '../texts/index.js';
-import { getPricesForUser, planLabel, type PricesSnapshot } from '../services/pricing.js';
+import { getPricesForUser, type PricesSnapshot } from '../services/pricing.js';
 import { type PriceRow } from '../db/prices.js';
 import { createTransaction, updateTransactionStatus, updateTransactionTxHash, hasPendingCryptoTransaction } from '../db/transactions.js';
 import { escapeHtml } from '../utils/html.js';
@@ -98,7 +98,7 @@ async function handleCryptoPayment(ctx: Context, duration: string): Promise<void
       'Далі дотримуйся інструкцій бота.\n\n' +
       'Виникло питання до підтримки - натисни кнопку "Є питання❓"\n\n' +
       '━━━━━━━━━━━━━━━━━━━━\n\n' +
-      `📦 ${escapeHtml(planLabel(planKey))}\n` +
+      `📦 ${escapeHtml(plan.display_name)}\n` +
       `ℹ️ Сума оплати — ${plan.amount} USDT\n\n` +
       'Монета: Tether (USDT)\n' +
       'Мережа: TRON — TRC20\n\n' +
@@ -230,7 +230,7 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
         `▸ uid: <code>${telegramId}</code>\n` +
         `▸ username: ${username}\n` +
         `▸ Сума оплати: ${state.plan.amount} USDT\n` +
-        `▸ План: ${escapeHtml(planLabel(state.planKey))}\n` +
+        `▸ План: ${escapeHtml(state.plan.display_name)}\n` +
         `▸ Хеш: <code>${escapeHtml(hash)}</code>\n` +
         `▸ Замовлення: <code>${escapeHtml(state.orderReference)}</code>`,
         {

@@ -25,8 +25,6 @@ async function handleAdminDecision(
   orderReference: string,
   approved: boolean,
 ): Promise<void> {
-  await ctx.answerCbQuery();
-
   const payment = await getTransactionByOrderReference(orderReference);
   if (!payment) {
     await ctx.answerCbQuery('Платіж не знайдено');
@@ -40,6 +38,8 @@ async function handleAdminDecision(
     await ctx.answerCbQuery('Цей платіж вже оброблено');
     return;
   }
+
+  await ctx.answerCbQuery();
 
   const adminUsername = ctx.from?.username ? `@${ctx.from.username}` : 'Admin';
   const originalText = ctx.callbackQuery && 'message' in ctx.callbackQuery

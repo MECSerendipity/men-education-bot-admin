@@ -62,6 +62,7 @@ export async function migrate() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS prices (
       key             VARCHAR(20) PRIMARY KEY,
+      display_name    VARCHAR(255) NOT NULL,
       amount          DECIMAL(10,2) NOT NULL,
       currency        VARCHAR(10) NOT NULL,
       days            INTEGER NOT NULL,
@@ -69,29 +70,26 @@ export async function migrate() {
     );
   `);
 
-  // ── price_offers: individual price offers per user ──
+  // ── price_offers: individual price snapshot per user (one row = full snapshot) ──
   await db.query(`
     CREATE TABLE IF NOT EXISTS price_offers (
       id              SERIAL PRIMARY KEY,
-      telegram_id     BIGINT NOT NULL,
-      key             VARCHAR(20) NOT NULL,
-      amount          DECIMAL(10,2) NOT NULL,
-      currency        VARCHAR(10) NOT NULL,
-      days            INTEGER NOT NULL,
+      telegram_id     BIGINT UNIQUE NOT NULL,
+      prices          JSONB NOT NULL,
       created_at      TIMESTAMPTZ DEFAULT NOW(),
-      UNIQUE(telegram_id, key)
+      updated_at      TIMESTAMPTZ DEFAULT NOW()
     );
   `);
 
   // Seed default prices (only inserts if not already present)
   await db.query(`
-    INSERT INTO prices (key, amount, currency, days) VALUES
-      ('card_1m',    790,  'UAH',  30),
-      ('card_6m',    3850, 'UAH',  180),
-      ('card_12m',   6500, 'UAH',  365),
-      ('crypto_1m',  18,   'USDT', 30),
-      ('crypto_6m',  90,   'USDT', 180),
-      ('crypto_12m', 150,  'USDT', 365)
+    INSERT INTO prices (key, display_name, amount, currency, days) VALUES
+      ('card_1m',    '🌂 1 місяць',   790,  'UAH',  30),
+      ('card_6m',    '🎩 6 місяців',  3850, 'UAH',  180),
+      ('card_12m',   '🏆 12 місяців', 6500, 'UAH',  365),
+      ('crypto_1m',  '🌂 1 місяць',   18,   'USDT', 30),
+      ('crypto_6m',  '🎩 6 місяців',  90,   'USDT', 180),
+      ('crypto_12m', '🏆 12 місяців', 150,  'USDT', 365)
     ON CONFLICT (key) DO NOTHING;
   `);
 
@@ -107,7 +105,7 @@ export async function migrate() {
   // ── indexes ──
   await db.query(`CREATE INDEX IF NOT EXISTS idx_subscriptions_telegram_id ON subscriptions (telegram_id)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_transactions_telegram_id ON transactions (telegram_id)`);
-  await db.query(`CREATE INDEX IF NOT EXISTS idx_price_offers_telegram_id ON price_offers (telegram_id)`);
+  // price_offers.telegram_id already has UNIQUE constraint — no separate index needed
   await db.query(`CREATE INDEX IF NOT EXISTS idx_subscriptions_active ON subscriptions (telegram_id) WHERE status = 'Active'`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_transactions_subscription_id ON transactions (subscription_id)`);
 

@@ -67,14 +67,6 @@ const METHOD_STYLES: Record<string, string> = {
   crypto: 'bg-orange-100 text-orange-700',
 };
 
-const PLAN_LABELS: Record<string, string> = {
-  card_1m: '1 month (card)',
-  card_6m: '6 months (card)',
-  card_12m: '12 months (card)',
-  crypto_1m: '1 month (crypto)',
-  crypto_6m: '6 months (crypto)',
-  crypto_12m: '12 months (crypto)',
-};
 
 export function SubscriptionsPage() {
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
@@ -199,7 +191,7 @@ export function SubscriptionsPage() {
                         <div>{userName}</div>
                         <div className="text-xs text-gray-400 font-mono">{sub.telegram_id}</div>
                       </td>
-                      <td className="px-4 py-3 text-gray-700">{PLAN_LABELS[sub.plan] ?? sub.plan}</td>
+                      <td className="px-4 py-3 text-gray-700">{sub.plan}</td>
                       <td className="px-4 py-3">
                         <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
                           METHOD_STYLES[sub.method] ?? 'bg-gray-100 text-gray-500'

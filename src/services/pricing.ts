@@ -33,15 +33,3 @@ export function daysFromPlanKey(planKey: string): number {
   if (planKey.endsWith('6m')) return 180;
   return 30;
 }
-
-const DURATION_LABELS: Record<string, string> = {
-  '1m': '1 місяць',
-  '6m': '6 місяців',
-  '12m': '12 місяців',
-};
-
-/** Generate human-readable plan label from key (card_6m → "Підписка ME Club — 6 місяців") */
-export function planLabel(planKey: string): string {
-  const duration = planKey.replace(/^(card|crypto)_/, '');
-  return `Підписка ME Club — ${DURATION_LABELS[duration] ?? duration}`;
-}

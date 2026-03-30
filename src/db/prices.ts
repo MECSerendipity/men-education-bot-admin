@@ -2,6 +2,7 @@ import { db } from './index.js';
 
 export interface PriceRow {
   key: string;
+  display_name: string;
   amount: number;
   currency: string;
   days: number;
@@ -14,6 +15,7 @@ export async function getGlobalPrices(): Promise<Record<string, PriceRow>> {
   for (const row of result.rows) {
     map[row.key] = {
       key: row.key,
+      display_name: row.display_name,
       amount: Number(row.amount),
       currency: row.currency,
       days: row.days,
@@ -25,21 +27,23 @@ export async function getGlobalPrices(): Promise<Record<string, PriceRow>> {
 /** Get price offers for a specific user (returns null if none) */
 export async function getOffersForUser(telegramId: number): Promise<Record<string, PriceRow> | null> {
   const result = await db.query(
-    'SELECT * FROM price_offers WHERE telegram_id = $1',
+    'SELECT prices FROM price_offers WHERE telegram_id = $1',
     [telegramId],
   );
   if (result.rows.length === 0) return null;
+  return result.rows[0].prices as Record<string, PriceRow>;
+}
 
-  const map: Record<string, PriceRow> = {};
-  for (const row of result.rows) {
-    map[row.key] = {
-      key: row.key,
-      amount: Number(row.amount),
-      currency: row.currency,
-      days: row.days,
-    };
-  }
-  return map;
+/** Save price offers for a user (full snapshot) */
+export async function saveOffersForUser(telegramId: number, prices: Record<string, PriceRow>): Promise<void> {
+  await db.query(
+    `INSERT INTO price_offers (telegram_id, prices)
+     VALUES ($1, $2)
+     ON CONFLICT (telegram_id) DO UPDATE SET
+       prices = EXCLUDED.prices,
+       updated_at = NOW()`,
+    [telegramId, JSON.stringify(prices)],
+  );
 }
 
 /** Delete all price offers for user (called after successful payment) */
@@ -55,21 +59,10 @@ export async function updateGlobalPrice(key: string, amount: number): Promise<vo
   );
 }
 
-/** Create or update a price offer for a user (for admin panel) */
-export async function upsertOfferForUser(
-  telegramId: number,
-  key: string,
-  amount: number,
-  currency: string,
-  days: number,
-): Promise<void> {
+/** Update display_name for a global price (for admin panel) */
+export async function updateGlobalDisplayName(key: string, displayName: string): Promise<void> {
   await db.query(
-    `INSERT INTO price_offers (telegram_id, key, amount, currency, days)
-     VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT (telegram_id, key) DO UPDATE SET
-       amount = EXCLUDED.amount,
-       currency = EXCLUDED.currency,
-       days = EXCLUDED.days`,
-    [telegramId, key, amount, currency, days],
+    'UPDATE prices SET display_name = $1, updated_at = NOW() WHERE key = $2',
+    [displayName, key],
   );
 }
