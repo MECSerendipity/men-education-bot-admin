@@ -26,7 +26,11 @@ interface HashFormState {
   createdAt: number;
 }
 
-const waitingForHash = createTtlMap<HashFormState>(6 * 60 * 60 * 1000); // 6 hours
+/** Users who see payment details but haven't clicked "Я оплатив" yet */
+const pendingPayment = createTtlMap<HashFormState>(6 * 60 * 60 * 1000); // 6 hours
+
+/** Users who clicked "Я оплатив" and we're waiting for hash (15 min) */
+const waitingForHash = createTtlMap<HashFormState>(15 * 60 * 1000); // 15 minutes
 
 /** Get env vars */
 function getWalletAddress(): string {
@@ -55,11 +59,14 @@ async function handleCryptoPayment(ctx: Context, duration: string): Promise<void
   const plan = prices[planKey];
   if (!plan) return;
 
-  // Block if user already has a pending crypto payment
+  // Block if user already has a pending crypto payment (WaitingConfirmation = hash submitted)
   if (await hasPendingCryptoTransaction(telegramId)) {
     await ctx.reply('У тебе вже є активний USDT платіж. Дочекайся його обробки.');
     return;
   }
+
+  // Delete the previous message (tariff/payment method selection)
+  await ctx.deleteMessage().catch(() => {});
 
   const orderReference = generateOrderReference(telegramId, 'crypto');
   const walletAddress = getWalletAddress();
@@ -71,17 +78,8 @@ async function handleCryptoPayment(ctx: Context, duration: string): Promise<void
   }
 
   try {
-    await createTransaction({
-      telegramId,
-      amount: plan.amount,
-      currency: plan.currency,
-      method: 'crypto',
-      plan: planKey,
-      orderReference,
-    });
-
-    // Save state — waiting for hash after user pays
-    waitingForHash.set(telegramId, {
+    // Save state — user sees payment details, hasn't paid yet
+    pendingPayment.set(telegramId, {
       orderReference,
       planKey,
       plan,
@@ -142,15 +140,19 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
     await handleCryptoPayment(ctx, duration);
   });
 
-  // "✅ Я ОПЛАТИВ" button
+  // "✅ Я ОПЛАТИВ" button — move from pendingPayment to waitingForHash
   bot.hears(TEXTS.BTN_USDT_PAID, async (ctx) => {
     const telegramId = ctx.from.id;
-    const state = waitingForHash.get(telegramId);
+    const state = pendingPayment.get(telegramId);
 
     if (!state) {
       await ctx.reply('У тебе немає активного USDT платежу. Обери тариф спочатку.');
       return;
     }
+
+    // Move to waitingForHash (15 min TTL)
+    pendingPayment.delete(telegramId);
+    waitingForHash.set(telegramId, state);
 
     // Ask for transaction hash + show cancel button
     await ctx.reply('Відправ будь ласка Transaction ID (хеш) 👇', {
@@ -167,12 +169,10 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
   // "❌ Скасувати оплату" button
   bot.hears(TEXTS.BTN_USDT_CANCEL, async (ctx) => {
     const telegramId = ctx.from.id;
-    const state = waitingForHash.get(telegramId);
 
-    if (state) {
-      waitingForHash.delete(telegramId);
-      await updateTransactionStatus(state.orderReference, 'Cancelled');
-    }
+    // Clear both states
+    pendingPayment.delete(telegramId);
+    waitingForHash.delete(telegramId);
 
     await ctx.reply('Оплату скасовано.', {
       reply_markup: MAIN_MENU_KEYBOARD,
@@ -207,7 +207,15 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
       return;
     }
 
-    // Save hash and update payment status
+    // Create transaction and save hash
+    await createTransaction({
+      telegramId,
+      amount: state.plan.amount,
+      currency: state.plan.currency,
+      method: 'crypto',
+      plan: state.planKey,
+      orderReference: state.orderReference,
+    });
     await updateTransactionTxHash(state.orderReference, hash);
     await updateTransactionStatus(state.orderReference, 'WaitingConfirmation');
 

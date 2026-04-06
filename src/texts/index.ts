@@ -31,7 +31,11 @@ export type TextKey =
   | 'BTN_USDT_CANCEL'
   | 'BTN_HOME'
   | 'BTN_BACK'
-  | 'ABOUT';
+  | 'ABOUT'
+  | 'INVITE_MESSAGE'
+  | 'BTN_INVITE_CLUB'
+  | 'BTN_INVITE_LIBRARY'
+  | 'BTN_INVITE_CHATS';
 
 /**
  * Path to texts.json — resolved from project root (process.cwd()),

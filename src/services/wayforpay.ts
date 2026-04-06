@@ -79,62 +79,105 @@ export function generateResponseSignature(orderReference: string, status: string
   return hmacMd5(signString);
 }
 
-/** Build HTML page that auto-submits payment form to WayForPay */
-export function buildPaymentPage(params: {
+/** Create an invoice via WayForPay API and return the payment URL */
+export async function createInvoice(params: {
   orderReference: string;
-  orderDate: number;
   amount: number;
   currency: string;
   productName: string;
-}): string {
-  const signature = generatePurchaseSignature(params);
+  clientAccountId: string;
+}): Promise<{ success: boolean; invoiceUrl?: string; reason?: string }> {
+  const orderDate = Math.floor(Date.now() / 1000);
+  const signature = generatePurchaseSignature({
+    orderReference: params.orderReference,
+    orderDate,
+    amount: params.amount,
+    currency: params.currency,
+    productName: params.productName,
+  });
+
   const serviceUrl = `${getWebhookBaseUrl()}/api/wayforpay/callback`;
   const returnUrl = `${getWebhookBaseUrl()}/pay/success`;
 
-  // Escape all dynamic values to prevent XSS
-  const eMerchant = escapeHtml(getMerchantAccount());
-  const eDomain = escapeHtml(getMerchantDomain());
-  const eSignature = escapeHtml(signature);
-  const eOrderRef = escapeHtml(params.orderReference);
-  const eProductName = escapeHtml(params.productName);
-  const eServiceUrl = escapeHtml(serviceUrl);
-  const eReturnUrl = escapeHtml(returnUrl);
+  const body = {
+    transactionType: 'CREATE_INVOICE',
+    merchantAccount: getMerchantAccount(),
+    merchantDomainName: getMerchantDomain(),
+    merchantAuthType: 'SimpleSignature',
+    merchantSignature: signature,
+    apiVersion: 1,
+    orderReference: params.orderReference,
+    orderDate,
+    orderTimeout: 86400,
+    amount: params.amount,
+    currency: params.currency,
+    productName: [params.productName],
+    productPrice: [params.amount],
+    productCount: [1],
+    clientAccountId: params.clientAccountId,
+    serviceUrl,
+    returnUrl,
+  };
 
-  return `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Оплата ME Club</title>
-  <style>
-    body { font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #f5f5f5; }
-    .loading { text-align: center; }
-    .spinner { border: 4px solid #ddd; border-top: 4px solid #333; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 0 auto 16px; }
-    @keyframes spin { to { transform: rotate(360deg); } }
-  </style>
-</head>
-<body>
-  <div class="loading">
-    <div class="spinner"></div>
-    <p>Переходимо на сторінку оплати...</p>
-  </div>
-  <form id="wayforpay" action="https://secure.wayforpay.com/pay" method="POST" style="display:none">
-    <input name="merchantAccount" value="${eMerchant}">
-    <input name="merchantDomainName" value="${eDomain}">
-    <input name="merchantSignature" value="${eSignature}">
-    <input name="merchantTransactionSecureType" value="AUTO">
-    <input name="orderReference" value="${eOrderRef}">
-    <input name="orderDate" value="${params.orderDate}">
-    <input name="amount" value="${params.amount}">
-    <input name="currency" value="${escapeHtml(params.currency)}">
-    <input name="productName[]" value="${eProductName}">
-    <input name="productCount[]" value="1">
-    <input name="productPrice[]" value="${params.amount}">
-    <input name="serviceUrl" value="${eServiceUrl}">
-    <input name="returnUrl" value="${eReturnUrl}">
-  </form>
-  <script>document.getElementById('wayforpay').submit();</script>
-</body>
-</html>`;
+  try {
+    const response = await fetch(WAYFORPAY_API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    const data = await response.json() as Record<string, unknown>;
+    const invoiceUrl = data.invoiceUrl ? String(data.invoiceUrl) : undefined;
+
+    if (!invoiceUrl) {
+      logger.warn('WayForPay createInvoice failed', {
+        orderReference: params.orderReference,
+        reasonCode: data.reasonCode,
+        reason: data.reason,
+      });
+      return { success: false, reason: String(data.reason ?? 'No invoiceUrl returned') };
+    }
+
+    return { success: true, invoiceUrl };
+  } catch (err) {
+    logger.error('WayForPay createInvoice request error', err);
+    return { success: false, reason: 'Request failed' };
+  }
+}
+
+/** Remove (cancel) a WayForPay invoice so the payment link becomes inactive */
+export async function removeInvoice(orderReference: string): Promise<boolean> {
+  const signString = [getMerchantAccount(), orderReference].join(';');
+  const signature = hmacMd5(signString);
+
+  const body = {
+    apiVersion: 1,
+    transactionType: 'REMOVE_INVOICE',
+    merchantAccount: getMerchantAccount(),
+    orderReference,
+    merchantSignature: signature,
+  };
+
+  try {
+    const response = await fetch(WAYFORPAY_API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    const data = await response.json() as Record<string, unknown>;
+    logger.info('WayForPay removeInvoice response', { orderReference, ...data });
+    const success = data.reasonCode === 1100;
+
+    if (!success) {
+      logger.warn('WayForPay removeInvoice failed', { orderReference, reasonCode: data.reasonCode, reason: data.reason });
+    }
+
+    return success;
+  } catch (err) {
+    logger.error('WayForPay removeInvoice request error', err);
+    return false;
+  }
 }
 
 /** Charge a card using recToken (for recurring payments) */

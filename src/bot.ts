@@ -8,6 +8,7 @@ import { registerSupportHandler } from './handlers/support.js';
 import { registerUsdtPaymentHandler } from './handlers/usdt-payment.js';
 import { registerUsdtAdminHandler } from './handlers/usdt-admin.js';
 import { registerNavigationHandlers } from './handlers/navigation.js';
+import { handleJoinRequest } from './services/invite.js';
 import { registerRulesHandler } from './handlers/rules.js';
 
 /** Creates and configures the bot instance with all handlers */
@@ -28,6 +29,9 @@ export function createBot(token: string): Telegraf {
   registerUsdtPaymentHandler(bot);
   registerUsdtAdminHandler(bot);
   registerRulesHandler(bot);
+
+  // Handle join requests for private channels
+  handleJoinRequest(bot);
 
   // Register navigation (back button, etc.) — must be last
   registerNavigationHandlers(bot);

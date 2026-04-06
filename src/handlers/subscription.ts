@@ -2,7 +2,8 @@ import { Telegraf, type Context } from 'telegraf';
 import { buildTariffKeyboard, paymentMethodKeyboard } from '../keyboards/index.js';
 import { TEXTS } from '../texts/index.js';
 import { getPricesForUser } from '../services/pricing.js';
-import { createTransaction, hasPendingCardTransaction } from '../db/transactions.js';
+import { createTransaction, hasPendingCardTransaction, updateTransactionStatus } from '../db/transactions.js';
+import { createInvoice, removeInvoice } from '../services/wayforpay.js';
 import { logger } from '../utils/logger.js';
 import { generateOrderReference } from '../utils/order-reference.js';
 
@@ -23,7 +24,7 @@ async function showTariffs(ctx: Context) {
   });
 }
 
-/** Handle card payment — create payment and send payment link */
+/** Handle card payment — create invoice via WayForPay API and send payment link */
 async function handleCardPayment(ctx: Context, duration: string): Promise<void> {
   const info = DURATION_MAP[duration];
   if (!info || !ctx.from) return;
@@ -40,13 +41,6 @@ async function handleCardPayment(ctx: Context, duration: string): Promise<void> 
   if (!plan) return;
 
   const orderReference = generateOrderReference(telegramId, 'card');
-  const webhookBaseUrl = process.env.WEBHOOK_BASE_URL;
-
-  if (!webhookBaseUrl) {
-    logger.error('WEBHOOK_BASE_URL not configured');
-    await ctx.reply('⚠️ Оплата тимчасово недоступна. Спробуй пізніше.');
-    return;
-  }
 
   try {
     await createTransaction({
@@ -58,14 +52,33 @@ async function handleCardPayment(ctx: Context, duration: string): Promise<void> 
       orderReference,
     });
 
-    const paymentUrl = `${webhookBaseUrl}/pay/${orderReference}`;
+    const result = await createInvoice({
+      orderReference,
+      amount: plan.amount,
+      currency: plan.currency,
+      productName: 'Підписка ME Club',
+      clientAccountId: `uid:${telegramId}`,
+    });
+
+    if (!result.success || !result.invoiceUrl) {
+      logger.error('Failed to create WayForPay invoice', { orderReference, reason: result.reason });
+      await ctx.reply('⚠️ Оплата тимчасово недоступна. Спробуй пізніше.');
+      return;
+    }
 
     await ctx.reply(
-      `💳 Оплата: ${plan.display_name}\n💰 Сума: ${plan.amount} ${plan.currency}\n\nНатисни кнопку нижче для оплати 👇`,
+      `Номер замовлення\n${orderReference}`,
+    );
+
+    await ctx.reply(
+      `💳 ${plan.display_name}\n💰 Сума: ${plan.amount} ${plan.currency}`,
       {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '💳 Оплатити', url: paymentUrl }],
+            [
+              { text: '💳 Оплатити', url: result.invoiceUrl },
+              { text: 'Відміна', callback_data: `cancel_invoice:${orderReference}` },
+            ],
           ],
         },
       },
@@ -118,13 +131,25 @@ export function registerSubscriptionHandler(bot: Telegraf) {
     });
   });
 
-  // Step 2: Card payment selected → create payment and send link
+  // Step 2: Card payment selected → delete selection message, create payment and send link
   bot.action(/^pay:card:(\w+)$/, async (ctx) => {
     await ctx.answerCbQuery();
+    await ctx.deleteMessage().catch(() => {});
     const duration = ctx.match[1];
     await handleCardPayment(ctx, duration);
   });
   // Note: pay:usdt:* is handled in usdt-payment handler
+
+  // Cancel invoice — remove WayForPay invoice and cancel transaction
+  bot.action(/^cancel_invoice:(.+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const orderReference = ctx.match[1];
+
+    await removeInvoice(orderReference);
+    await updateTransactionStatus(orderReference, 'Cancelled');
+
+    await ctx.editMessageText('Платіж скасовано');
+  });
 
   // Back to tariffs
   bot.action('back:tariffs', async (ctx) => {

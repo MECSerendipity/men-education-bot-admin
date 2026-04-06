@@ -84,13 +84,13 @@ export async function updateTransactionCard(orderReference: string, recToken: st
   );
 }
 
-/** Check if user has a pending crypto transaction */
+/** Check if user has a crypto transaction waiting for admin confirmation */
 export async function hasPendingCryptoTransaction(telegramId: number): Promise<boolean> {
   const result = await db.query(
     `SELECT 1 FROM transactions
      WHERE telegram_id = $1
        AND method = 'crypto'
-       AND status IN ('Pending', 'WaitingConfirmation')
+       AND status = 'WaitingConfirmation'
      LIMIT 1`,
     [telegramId],
   );

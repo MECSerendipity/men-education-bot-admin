@@ -1,11 +1,11 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { Telegraf } from 'telegraf';
 import { logger } from '../utils/logger.js';
-import { buildPaymentPage, generateCallbackSignature, generateResponseSignature } from '../services/wayforpay.js';
+import { generateCallbackSignature, generateResponseSignature } from '../services/wayforpay.js';
 import { getTransactionByOrderReference, updateTransactionStatus, updateTransactionCard, claimTransaction } from '../db/transactions.js';
 import { activateSubscription } from '../db/subscriptions.js';
 import { getPricesForUser, daysFromPlanKey } from '../services/pricing.js';
-import { getGlobalPrices, deleteOffersForUser } from '../db/prices.js';
+import { deleteOffersForUser } from '../db/prices.js';
 import { sendRulesOrInvite } from '../handlers/rules.js';
 import { reloadTexts } from '../texts/index.js';
 
@@ -35,50 +35,6 @@ function parsePath(url: string): string[] {
   return new URL(url, 'http://localhost').pathname.split('/').filter(Boolean);
 }
 
-const PAYMENT_LINK_TTL_MS = 15 * 60 * 1000; // 15 minutes
-
-/** Handle GET /pay/:orderReference — render auto-submit form to WayForPay */
-async function handlePayPage(orderReference: string, res: ServerResponse): Promise<void> {
-  const payment = await getTransactionByOrderReference(orderReference);
-  if (!payment) {
-    res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(expiredPage('Платіж не знайдено', 'Цього платежу не існує. Створи новий в боті.'));
-    return;
-  }
-
-  // Check if link expired (15 minutes)
-  const age = Date.now() - new Date(payment.created_at).getTime();
-  if (age > PAYMENT_LINK_TTL_MS) {
-    await updateTransactionStatus(orderReference, 'Expired');
-    res.writeHead(410, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(expiredPage('Посилання протерміноване ⏰', 'Це посилання на оплату діяло 15 хвилин і вже не активне.<br>Поверніться в Telegram бот і створіть нову оплату.'));
-    return;
-  }
-
-  // Don't allow paying already completed/expired payments
-  if (payment.status !== 'Pending') {
-    res.writeHead(410, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(expiredPage('Платіж вже оброблено', 'Цей платіж вже було оброблено. Перевір статус у боті.'));
-    return;
-  }
-
-  // Get product name from global prices
-  const globalPrices = await getGlobalPrices();
-  const plan = globalPrices[payment.plan];
-  const productName = plan?.display_name ?? 'Підписка ME Club';
-  const orderDate = Math.floor(new Date(payment.created_at).getTime() / 1000);
-
-  const html = buildPaymentPage({
-    orderReference: payment.order_reference,
-    orderDate,
-    amount: Number(payment.amount),
-    currency: payment.currency,
-    productName,
-  });
-
-  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-  res.end(html);
-}
 
 /** Render a styled info/error page */
 function expiredPage(title: string, message: string): string {
@@ -180,8 +136,8 @@ async function handleCallback(req: IncomingMessage, res: ServerResponse, bot: Te
   const payment = await getTransactionByOrderReference(orderReference);
 
   if (payment) {
-    // Skip if already processed (WayForPay retries callbacks for 4 days)
-    if (payment.status !== 'Pending') {
+    // Skip if already fully processed (Approved/Declined are final)
+    if (payment.status === 'Approved' || payment.status === 'Declined') {
       logger.info('Callback for already processed payment, skipping', { orderReference, currentStatus: payment.status });
       const time = Math.floor(Date.now() / 1000);
       const responseSignature = generateResponseSignature(orderReference, 'accept', time);
@@ -190,8 +146,19 @@ async function handleCallback(req: IncomingMessage, res: ServerResponse, bot: Te
       return;
     }
 
+    // WaitingAuthComplete is intermediate (3DS) — update status but don't process yet
+    if (transactionStatus === 'WaitingAuthComplete') {
+      await updateTransactionStatus(orderReference, 'WaitingAuthComplete');
+      logger.info('3DS in progress, waiting for final callback', { orderReference });
+      const time = Math.floor(Date.now() / 1000);
+      const responseSignature = generateResponseSignature(orderReference, 'accept', time);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ orderReference, status: 'accept', time, signature: responseSignature }));
+      return;
+    }
+
     // Atomically claim — prevents double-processing from WayForPay retries
-    const claimed = await claimTransaction(orderReference, 'Pending', transactionStatus);
+    const claimed = await claimTransaction(orderReference, payment.status, transactionStatus);
     if (!claimed) {
       logger.info('Callback race: transaction already claimed, skipping', { orderReference });
       const time = Math.floor(Date.now() / 1000);
@@ -241,24 +208,28 @@ async function handleCallback(req: IncomingMessage, res: ServerResponse, bot: Te
       // Send rules or invite link
       await sendRulesOrInvite(bot, payment.telegram_id);
     } else if (transactionStatus === 'Declined') {
-      // Notify user about failed payment
-      const reason = String(data.reason ?? 'Невідома помилка');
-      try {
-        await bot.telegram.sendMessage(
-          payment.telegram_id,
-          `❌ Оплату відхилено\n\n` +
-          `Причина: ${reason}\n\n` +
-          `Спробуй ще раз або обери інший спосіб оплати.`,
-          {
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: '🔄 Спробувати ще раз', callback_data: 'subscription' }],
-              ],
-            },
+      // Don't notify user if transaction was already cancelled (e.g. invoice removed)
+      if (payment.status === 'Cancelled') {
+        logger.info('Declined callback for cancelled transaction, skipping notification', { orderReference });
+      } else {
+        const reason = String(data.reason ?? 'Невідома помилка');
+        try {
+          await bot.telegram.sendMessage(
+            payment.telegram_id,
+            `❌ Оплату відхилено\n\n` +
+            `Причина: ${reason}\n\n` +
+            `Спробуй ще раз або обери інший спосіб оплати.`,
+            {
+              reply_markup: {
+                inline_keyboard: [
+                  [{ text: '🔄 Спробувати ще раз', callback_data: 'subscription' }],
+                ],
+              },
           },
         );
-      } catch (err) {
-        logger.error('Failed to send payment declined message', err);
+        } catch (err) {
+          logger.error('Failed to send payment declined message', err);
+        }
       }
     }
   } else {
@@ -290,12 +261,6 @@ export function startWebhookServer(bot: Telegraf): void {
       // GET or POST /pay/success (WayForPay redirects with POST)
       if ((req.method === 'GET' || req.method === 'POST') && segments[0] === 'pay' && segments[1] === 'success') {
         await handleSuccessPage(req, res);
-        return;
-      }
-
-      // GET /pay/:orderReference
-      if (req.method === 'GET' && segments[0] === 'pay' && segments[1]) {
-        await handlePayPage(segments[1], res);
         return;
       }
 

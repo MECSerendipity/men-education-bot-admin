@@ -102,12 +102,27 @@ export async function migrate() {
     );
   `);
 
+  // ── invite_links: one-time invite links to private channels ──
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS invite_links (
+      id              SERIAL PRIMARY KEY,
+      telegram_id     BIGINT NOT NULL,
+      channel_id      BIGINT NOT NULL,
+      invite_link     TEXT NOT NULL,
+      status          VARCHAR(20) DEFAULT 'active',
+      expires_at      TIMESTAMPTZ,
+      created_at      TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(telegram_id, channel_id)
+    );
+  `);
+
   // ── indexes ──
   await db.query(`CREATE INDEX IF NOT EXISTS idx_subscriptions_telegram_id ON subscriptions (telegram_id)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_transactions_telegram_id ON transactions (telegram_id)`);
   // price_offers.telegram_id already has UNIQUE constraint — no separate index needed
   await db.query(`CREATE INDEX IF NOT EXISTS idx_subscriptions_active ON subscriptions (telegram_id) WHERE status = 'Active'`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_transactions_subscription_id ON transactions (subscription_id)`);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_invite_links_telegram_id ON invite_links (telegram_id)`);
 
   logger.info('Database migrated');
 }

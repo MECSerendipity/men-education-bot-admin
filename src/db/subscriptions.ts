@@ -120,8 +120,8 @@ export async function activateSubscription(params: {
   }
 }
 
-/** Expire subscriptions that are past their expires_at (for jobs) */
-export async function expireOverdueSubscriptions(): Promise<number> {
+/** Expire subscriptions that are past their expires_at (for jobs). Returns expired telegram_ids. */
+export async function expireOverdueSubscriptions(): Promise<number[]> {
   const result = await db.query(
     `WITH expired AS (
        UPDATE subscriptions
@@ -134,6 +134,6 @@ export async function expireOverdueSubscriptions(): Promise<number> {
      RETURNING telegram_id`,
   );
 
-  return result.rowCount ?? 0;
+  return result.rows.map((row: { telegram_id: number }) => row.telegram_id);
 }
 

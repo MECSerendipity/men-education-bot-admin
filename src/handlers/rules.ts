@@ -3,6 +3,7 @@ import { hasAcceptedRules, acceptRules } from '../db/users.js';
 import { MAIN_MENU_KEYBOARD } from '../keyboards/index.js';
 import { TEXTS } from '../texts/index.js';
 import { logger } from '../utils/logger.js';
+import { generateAndSendInvites } from '../services/invite.js';
 
 const BTN_ACCEPT_RULES = '✅ ПРИЙМАЮ ПРАВИЛА';
 
@@ -57,25 +58,9 @@ export async function sendRulesOrInvite(bot: Telegraf, telegramId: number): Prom
   }
 }
 
-/** Send the channel invite link after rules are accepted */
+/** Generate and send invite links to private channels */
 async function sendInviteLink(bot: Telegraf, telegramId: number): Promise<void> {
-  try {
-    // TODO: replace with actual invite link or generate one dynamically
-    await bot.telegram.sendMessage(
-      telegramId,
-      '🎉 Ласкаво просимо до ME Club!\n\n' +
-      'Ось твоє посилання для входу в клуб 👇',
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '🚀 Увійти в ME Club', url: 'https://t.me/+CHANNEL_INVITE_LINK' }],
-          ],
-        },
-      },
-    );
-  } catch (err) {
-    logger.error('Failed to send invite link', err);
-  }
+  await generateAndSendInvites(bot, telegramId);
 }
 
 /** Register rules acceptance handler */
