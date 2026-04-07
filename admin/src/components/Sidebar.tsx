@@ -1,5 +1,5 @@
 /** Available navigation pages */
-export type Page = 'dashboard' | 'users' | 'subscriptions' | 'transactions' | 'prices' | 'statistics' | 'broadcast' | 'texts';
+export type Page = 'dashboard' | 'users' | 'subscriptions' | 'transactions' | 'prices' | 'statistics' | 'broadcast' | 'texts' | 'logs';
 
 interface SidebarProps {
   currentPage: Page;
@@ -100,6 +100,17 @@ function TextsIcon() {
   );
 }
 
+/** Terminal/logs icon */
+function LogsIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" strokeWidth={1.5} className="w-5 h-5">
+      <path strokeLinecap="round" strokeLinejoin="round"
+            d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0021 18V6a2.25 2.25 0 00-2.25-2.25H5.25A2.25 2.25 0 003 6v12a2.25 2.25 0 002.25 2.25z" />
+    </svg>
+  );
+}
+
 const NAV_ITEMS: NavItem[] = [
   { id: 'dashboard', label: 'Dashboard', icon: <HomeIcon /> },
   { id: 'users', label: 'Users', icon: <UsersIcon /> },
@@ -109,6 +120,7 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'statistics', label: 'Statistics', icon: <ChartIcon /> },
   { id: 'broadcast', label: 'Broadcast', icon: <MegaphoneIcon /> },
   { id: 'texts', label: 'Texts', icon: <TextsIcon /> },
+  { id: 'logs', label: 'Logs', icon: <LogsIcon /> },
 ];
 
 export function Sidebar({ currentPage, onNavigate }: SidebarProps) {

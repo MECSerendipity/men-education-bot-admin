@@ -4,8 +4,7 @@ import { migrate } from './db/migrate.js';
 import { db } from './db/index.js';
 import { logger } from './utils/logger.js';
 import { startWebhookServer } from './webhook/server.js';
-import { expireOverdueSubscriptions } from './db/subscriptions.js';
-import { revokeAccessForUser } from './services/invite.js';
+import { startScheduler } from './jobs/scheduler.js';
 
 /* ---------- Config validation ---------- */
 
@@ -52,21 +51,8 @@ async function start() {
     logger.info('Bot started successfully');
   });
 
-  // Expire overdue subscriptions every 5 minutes
-  const expiryInterval = setInterval(async () => {
-    try {
-      const expiredUsers = await expireOverdueSubscriptions();
-      if (expiredUsers.length > 0) {
-        logger.info(`Expired ${expiredUsers.length} overdue subscriptions`);
-        for (const telegramId of expiredUsers) {
-          await revokeAccessForUser(bot, telegramId);
-        }
-      }
-    } catch (err) {
-      logger.error('Failed to expire subscriptions', err);
-    }
-  }, 5 * 60 * 1000);
-  expiryInterval.unref();
+  // Start job scheduler (charge @ 09:00/15:00 UTC, expire @ 07:00 UTC)
+  startScheduler(bot);
 
   // Graceful shutdown — stop bot and close DB pool
   const shutdown = (signal: string) => {

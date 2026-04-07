@@ -22,6 +22,14 @@ export function registerStartHandler(bot: Telegraf) {
     }
 
     await ctx.reply(TEXTS.ABOUT, {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: TEXTS.BTN_SUBSCRIPTION_INLINE, callback_data: 'subscription' }],
+        ],
+      },
+    });
+
+    await ctx.reply(TEXTS.MAIN_MENU, {
       reply_markup: MAIN_MENU_KEYBOARD,
     });
   });

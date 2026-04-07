@@ -472,6 +472,29 @@ app.get<{
   }
 );
 
+/** GET /api/subscriptions/:telegramId/events — subscription event history for a user */
+app.get<{
+  Params: { telegramId: string };
+}>(
+  '/api/subscriptions/:telegramId/events',
+  { preHandler: [authenticate] },
+  async (request, reply) => {
+    try {
+      const telegramId = request.params.telegramId;
+      const result = await dbPool.query(
+        `SELECT * FROM subscription_events
+         WHERE telegram_id = $1
+         ORDER BY created_at DESC`,
+        [telegramId],
+      );
+      return { events: result.rows };
+    } catch (err) {
+      app.log.error(err, 'Failed to fetch subscription events');
+      return reply.status(500).send({ error: 'Failed to load events' });
+    }
+  }
+);
+
 /* ---------- Transactions API ---------- */
 
 /** GET /api/transactions — paginated transaction list with search and status filter */
@@ -649,6 +672,137 @@ app.post(
     } catch (err) {
       app.log.error(err, 'Failed to reach bot for text reload');
       return reply.status(502).send({ error: 'Cannot reach bot server' });
+    }
+  }
+);
+
+/* ---------- Logs API ---------- */
+
+/** GET /api/logs/activity — user activity logs with search and filter */
+app.get<{
+  Querystring: { page?: string; limit?: string; search?: string; filter?: string };
+}>(
+  '/api/logs/activity',
+  { preHandler: [authenticate] },
+  async (request, reply) => {
+    try {
+      const page = Math.max(1, Number(request.query.page) || 1);
+      const limit = Math.min(100, Math.max(1, Number(request.query.limit) || 50));
+      const offset = (page - 1) * limit;
+      const searchRaw = (request.query.search ?? '').trim();
+      const search = searchRaw.replace(/[%_\\]/g, '\\$&');
+      const filter = request.query.filter ?? 'all'; // all | in | out
+
+      const conditions: string[] = [];
+      const params: unknown[] = [];
+      let paramIndex = 1;
+
+      if (search) {
+        conditions.push(
+          `(a.telegram_id::text ILIKE $${paramIndex} OR a.username ILIKE $${paramIndex} OR a.content ILIKE $${paramIndex} OR a.handler ILIKE $${paramIndex})`
+        );
+        params.push(`%${search}%`);
+        paramIndex += 1;
+      }
+
+      if (filter === 'in' || filter === 'out') {
+        conditions.push(`a.direction = $${paramIndex}`);
+        params.push(filter);
+        paramIndex += 1;
+      }
+
+      const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+      const countResult = await dbPool.query(
+        `SELECT COUNT(*) FROM activity_logs a ${where}`,
+        params,
+      );
+      const total = Number(countResult.rows[0].count);
+
+      const dataResult = await dbPool.query(
+        `SELECT a.id, a.telegram_id, a.username, a.direction, a.message_type,
+                a.content, a.handler, a.created_at
+         FROM activity_logs a
+         ${where}
+         ORDER BY a.created_at DESC
+         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+        [...params, limit, offset],
+      );
+
+      return {
+        logs: dataResult.rows,
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      };
+    } catch (err) {
+      app.log.error(err, 'Failed to fetch activity logs');
+      return reply.status(500).send({ error: 'Failed to load activity logs' });
+    }
+  }
+);
+
+/** GET /api/logs/system — system logs with search and level filter */
+app.get<{
+  Querystring: { page?: string; limit?: string; search?: string; filter?: string };
+}>(
+  '/api/logs/system',
+  { preHandler: [authenticate] },
+  async (request, reply) => {
+    try {
+      const page = Math.max(1, Number(request.query.page) || 1);
+      const limit = Math.min(100, Math.max(1, Number(request.query.limit) || 50));
+      const offset = (page - 1) * limit;
+      const searchRaw = (request.query.search ?? '').trim();
+      const search = searchRaw.replace(/[%_\\]/g, '\\$&');
+      const filter = request.query.filter ?? 'all'; // all | info | warn | error
+
+      const conditions: string[] = [];
+      const params: unknown[] = [];
+      let paramIndex = 1;
+
+      if (search) {
+        conditions.push(
+          `(s.message ILIKE $${paramIndex} OR s.context::text ILIKE $${paramIndex})`
+        );
+        params.push(`%${search}%`);
+        paramIndex += 1;
+      }
+
+      if (filter !== 'all') {
+        conditions.push(`s.level = $${paramIndex}`);
+        params.push(filter);
+        paramIndex += 1;
+      }
+
+      const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+      const countResult = await dbPool.query(
+        `SELECT COUNT(*) FROM system_logs s ${where}`,
+        params,
+      );
+      const total = Number(countResult.rows[0].count);
+
+      const dataResult = await dbPool.query(
+        `SELECT s.id, s.level, s.message, s.context, s.created_at
+         FROM system_logs s
+         ${where}
+         ORDER BY s.created_at DESC
+         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+        [...params, limit, offset],
+      );
+
+      return {
+        logs: dataResult.rows,
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      };
+    } catch (err) {
+      app.log.error(err, 'Failed to fetch system logs');
+      return reply.status(500).send({ error: 'Failed to load system logs' });
     }
   }
 );

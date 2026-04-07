@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { Telegraf } from 'telegraf';
 import { logger } from '../utils/logger.js';
 import { generateCallbackSignature, generateResponseSignature } from '../services/wayforpay.js';
-import { getTransactionByOrderReference, updateTransactionStatus, updateTransactionCard, claimTransaction } from '../db/transactions.js';
+import { getTransactionByOrderReference, updateTransactionStatus, updateTransactionCard, updateTransactionDeclineReason, claimTransaction } from '../db/transactions.js';
 import { activateSubscription } from '../db/subscriptions.js';
 import { getPricesForUser, daysFromPlanKey } from '../services/pricing.js';
 import { deleteOffersForUser } from '../db/prices.js';
@@ -208,6 +208,7 @@ async function handleCallback(req: IncomingMessage, res: ServerResponse, bot: Te
       // Send rules or invite link
       await sendRulesOrInvite(bot, payment.telegram_id);
     } else if (transactionStatus === 'Declined') {
+      await updateTransactionDeclineReason(orderReference, String(data.reason ?? ''), String(data.reasonCode ?? ''));
       // Don't notify user if transaction was already cancelled (e.g. invoice removed)
       if (payment.status === 'Cancelled') {
         logger.info('Declined callback for cancelled transaction, skipping notification', { orderReference });

@@ -1,5 +1,6 @@
 import { Telegraf } from 'telegraf';
 import { registerErrorHandler } from './middleware/error-handler.js';
+import { registerActivityLogger } from './middleware/activity-logger.js';
 import { registerStartHandler } from './handlers/start.js';
 import { registerSubscriptionHandler } from './handlers/subscription.js';
 import { registerMySubscriptionHandler } from './handlers/my-subscription.js';
@@ -17,6 +18,9 @@ export function createBot(token: string): Telegraf {
 
   // Global error handler — must be registered first
   registerErrorHandler(bot);
+
+  // Activity logger — logs all user interactions
+  registerActivityLogger(bot);
 
   // Register command handlers
   registerStartHandler(bot);

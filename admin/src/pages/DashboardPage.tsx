@@ -7,6 +7,7 @@ import { StatisticsPage } from './StatisticsPage';
 import { BroadcastPage } from './BroadcastPage';
 import { TextsPage } from './TextsPage';
 import { PricesPage } from './PricesPage';
+import { LogsPage } from './LogsPage';
 
 interface DashboardPageProps {
   onLogout: () => void;
@@ -29,6 +30,8 @@ function PageContent({ page }: { page: Page }) {
       return <BroadcastPage />;
     case 'texts':
       return <TextsPage />;
+    case 'logs':
+      return <LogsPage />;
     case 'dashboard':
     default:
       return (

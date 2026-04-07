@@ -54,9 +54,15 @@ export async function migrate() {
       card_pan        VARCHAR(20),
       tx_hash         VARCHAR(255),
       subscription_id INTEGER REFERENCES subscriptions(id),
+      decline_reason  TEXT,
+      decline_reason_code VARCHAR(20),
       created_at      TIMESTAMPTZ DEFAULT NOW()
     );
   `);
+
+  // ── migrations: add columns if missing ──
+  await db.query(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS decline_reason TEXT`);
+  await db.query(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS decline_reason_code VARCHAR(20)`);
 
   // ── prices: global plan prices ──
   await db.query(`
@@ -102,6 +108,23 @@ export async function migrate() {
     );
   `);
 
+  // ── subscription_events: audit log of subscription changes ──
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS subscription_events (
+      id              SERIAL PRIMARY KEY,
+      subscription_id INTEGER REFERENCES subscriptions(id),
+      telegram_id     BIGINT NOT NULL,
+      event           VARCHAR(30) NOT NULL,
+      plan            VARCHAR(20),
+      method          VARCHAR(20),
+      card_pan        VARCHAR(20),
+      amount          DECIMAL(10,2),
+      currency        VARCHAR(10),
+      expires_at      TIMESTAMPTZ,
+      created_at      TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
   // ── invite_links: one-time invite links to private channels ──
   await db.query(`
     CREATE TABLE IF NOT EXISTS invite_links (
@@ -116,13 +139,44 @@ export async function migrate() {
     );
   `);
 
+  // ── activity_logs: user interactions with the bot ──
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS activity_logs (
+      id              SERIAL PRIMARY KEY,
+      telegram_id     BIGINT NOT NULL,
+      username        VARCHAR(255),
+      direction       VARCHAR(4) NOT NULL,
+      message_type    VARCHAR(30) NOT NULL,
+      content         TEXT,
+      handler         VARCHAR(100),
+      created_at      TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  // ── system_logs: server events, jobs, payments ──
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS system_logs (
+      id              SERIAL PRIMARY KEY,
+      level           VARCHAR(10) NOT NULL,
+      message         TEXT NOT NULL,
+      context         JSONB,
+      created_at      TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
   // ── indexes ──
   await db.query(`CREATE INDEX IF NOT EXISTS idx_subscriptions_telegram_id ON subscriptions (telegram_id)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_transactions_telegram_id ON transactions (telegram_id)`);
   // price_offers.telegram_id already has UNIQUE constraint — no separate index needed
   await db.query(`CREATE INDEX IF NOT EXISTS idx_subscriptions_active ON subscriptions (telegram_id) WHERE status = 'Active'`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_transactions_subscription_id ON transactions (subscription_id)`);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_subscription_events_telegram_id ON subscription_events (telegram_id)`);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_subscription_events_subscription_id ON subscription_events (subscription_id)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_invite_links_telegram_id ON invite_links (telegram_id)`);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_activity_logs_telegram_id ON activity_logs (telegram_id)`);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_activity_logs_created_at ON activity_logs (created_at DESC)`);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_system_logs_created_at ON system_logs (created_at DESC)`);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_system_logs_level ON system_logs (level)`);
 
   logger.info('Database migrated');
 }

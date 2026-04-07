@@ -14,6 +14,8 @@ export interface Transaction {
   card_pan: string | null;
   tx_hash: string | null;
   subscription_id: number | null;
+  decline_reason: string | null;
+  decline_reason_code: string | null;
   created_at: Date;
 }
 
@@ -73,6 +75,14 @@ export async function updateTransactionTxHash(orderReference: string, txHash: st
   await db.query(
     'UPDATE transactions SET tx_hash = $1 WHERE order_reference = $2',
     [txHash, orderReference],
+  );
+}
+
+/** Save decline reason after failed payment */
+export async function updateTransactionDeclineReason(orderReference: string, reason: string | null, reasonCode: string | null): Promise<void> {
+  await db.query(
+    'UPDATE transactions SET decline_reason = $1, decline_reason_code = $2 WHERE order_reference = $3',
+    [reason, reasonCode, orderReference],
   );
 }
 

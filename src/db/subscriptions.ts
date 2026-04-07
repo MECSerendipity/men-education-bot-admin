@@ -1,5 +1,6 @@
 import { db } from './index.js';
 
+
 export interface Subscription {
   id: number;
   user_id: number;
@@ -110,8 +111,27 @@ export async function activateSubscription(params: {
       [telegramId],
     );
 
+    const sub: Subscription = result.rows[0];
+
+    // Log subscription event (within the same transaction)
+    await client.query(
+      `INSERT INTO subscription_events (subscription_id, telegram_id, event, plan, method, card_pan, amount, currency, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
+        sub.id,
+        telegramId,
+        existing ? 'renewed' : 'created',
+        plan,
+        method,
+        sub.card_pan,
+        Number((prices[plan] as Record<string, unknown>)?.amount ?? 0),
+        String((prices[plan] as Record<string, unknown>)?.currency ?? ''),
+        sub.expires_at,
+      ],
+    );
+
     await client.query('COMMIT');
-    return result.rows[0];
+    return sub;
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
@@ -120,20 +140,4 @@ export async function activateSubscription(params: {
   }
 }
 
-/** Expire subscriptions that are past their expires_at (for jobs). Returns expired telegram_ids. */
-export async function expireOverdueSubscriptions(): Promise<number[]> {
-  const result = await db.query(
-    `WITH expired AS (
-       UPDATE subscriptions
-       SET status = 'Expired', updated_at = NOW()
-       WHERE status = 'Active' AND expires_at < NOW()
-       RETURNING telegram_id
-     )
-     UPDATE users SET is_subscribed = FALSE, updated_at = NOW()
-     WHERE telegram_id IN (SELECT telegram_id FROM expired)
-     RETURNING telegram_id`,
-  );
-
-  return result.rows.map((row: { telegram_id: number }) => row.telegram_id);
-}
 

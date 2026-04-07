@@ -15,6 +15,20 @@ interface Subscription {
   last_name: string | null;
 }
 
+interface SubscriptionEvent {
+  id: number;
+  subscription_id: number;
+  telegram_id: number;
+  event: string;
+  plan: string | null;
+  method: string | null;
+  card_pan: string | null;
+  amount: number | null;
+  currency: string | null;
+  expires_at: string | null;
+  created_at: string;
+}
+
 interface SubscriptionsResponse {
   subscriptions: Subscription[];
   total: number;
@@ -36,8 +50,17 @@ function SearchIcon() {
   );
 }
 
+function ChevronIcon({ open }: { open: boolean }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" strokeWidth={2} className={`w-4 h-4 transition-transform ${open ? 'rotate-90' : ''}`}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+    </svg>
+  );
+}
+
 function formatDate(dateStr: string | null): string {
-  if (!dateStr) return '—';
+  if (!dateStr) return '-';
   return new Date(dateStr).toLocaleDateString('uk-UA', {
     day: '2-digit',
     month: '2-digit',
@@ -46,7 +69,7 @@ function formatDate(dateStr: string | null): string {
 }
 
 function formatDateTime(dateStr: string | null): string {
-  if (!dateStr) return '—';
+  if (!dateStr) return '-';
   return new Date(dateStr).toLocaleString('uk-UA', {
     day: '2-digit',
     month: '2-digit',
@@ -67,6 +90,26 @@ const METHOD_STYLES: Record<string, string> = {
   crypto: 'bg-orange-100 text-orange-700',
 };
 
+const EVENT_STYLES: Record<string, string> = {
+  created: 'bg-blue-100 text-blue-700',
+  renewed: 'bg-green-100 text-green-700',
+  plan_changed: 'bg-yellow-100 text-yellow-700',
+  method_changed: 'bg-purple-100 text-purple-700',
+  card_changed: 'bg-indigo-100 text-indigo-700',
+  cancelled: 'bg-red-100 text-red-600',
+  expired: 'bg-gray-100 text-gray-500',
+};
+
+const EVENT_LABELS: Record<string, string> = {
+  created: 'Created',
+  renewed: 'Renewed',
+  plan_changed: 'Plan Changed',
+  method_changed: 'Method Changed',
+  card_changed: 'Card Changed',
+  cancelled: 'Cancelled',
+  expired: 'Expired',
+};
+
 
 export function SubscriptionsPage() {
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
@@ -78,6 +121,11 @@ export function SubscriptionsPage() {
   const [counts, setCounts] = useState<SubscriptionsResponse['counts']>({ all: 0, Active: 0, Expired: 0, Cancelled: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
+  // Expandable rows: telegramId -> events
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [events, setEvents] = useState<SubscriptionEvent[]>([]);
+  const [eventsLoading, setEventsLoading] = useState(false);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -107,6 +155,31 @@ export function SubscriptionsPage() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
   useEffect(() => { setPage(1); }, [search, filter]);
+
+  const toggleExpand = async (telegramId: number) => {
+    if (expandedId === telegramId) {
+      setExpandedId(null);
+      setEvents([]);
+      return;
+    }
+
+    setExpandedId(telegramId);
+    setEventsLoading(true);
+    const token = localStorage.getItem('admin_token');
+
+    try {
+      const res = await fetch(`/api/subscriptions/${telegramId}/events`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error('Failed to load events');
+      const data = await res.json();
+      setEvents(data.events);
+    } catch {
+      setEvents([]);
+    } finally {
+      setEventsLoading(false);
+    }
+  };
 
   const filterButtons: { key: Filter; label: string }[] = [
     { key: 'all', label: `All (${counts.all})` },
@@ -169,6 +242,7 @@ export function SubscriptionsPage() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-gray-600 text-left">
                 <tr>
+                  <th className="px-4 py-3 font-medium w-8"></th>
                   <th className="px-4 py-3 font-medium">ID</th>
                   <th className="px-4 py-3 font-medium">User</th>
                   <th className="px-4 py-3 font-medium">Plan</th>
@@ -184,32 +258,103 @@ export function SubscriptionsPage() {
                   const userName = sub.username
                     ? `@${sub.username}`
                     : [sub.first_name, sub.last_name].filter(Boolean).join(' ') || String(sub.telegram_id);
+                  const isExpanded = expandedId === sub.telegram_id;
+
                   return (
-                    <tr key={sub.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="px-4 py-3 font-mono text-gray-400">{sub.id}</td>
-                      <td className="px-4 py-3 text-gray-700">
-                        <div>{userName}</div>
-                        <div className="text-xs text-gray-400 font-mono">{sub.telegram_id}</div>
-                      </td>
-                      <td className="px-4 py-3 text-gray-700">{sub.plan}</td>
-                      <td className="px-4 py-3">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                          METHOD_STYLES[sub.method] ?? 'bg-gray-100 text-gray-500'
-                        }`}>
-                          {sub.method}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                          STATUS_STYLES[sub.status] ?? 'bg-gray-100 text-gray-500'
-                        }`}>
-                          {sub.status}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-gray-500 text-xs font-mono">{sub.card_pan ?? '—'}</td>
-                      <td className="px-4 py-3 text-gray-500">{formatDate(sub.started_at)}</td>
-                      <td className="px-4 py-3 text-gray-500">{formatDate(sub.expires_at)}</td>
-                    </tr>
+                    <>
+                      <tr
+                        key={sub.id}
+                        onClick={() => toggleExpand(sub.telegram_id)}
+                        className={`hover:bg-gray-50 transition-colors cursor-pointer ${isExpanded ? 'bg-blue-50' : ''}`}
+                      >
+                        <td className="px-4 py-3 text-gray-400">
+                          <ChevronIcon open={isExpanded} />
+                        </td>
+                        <td className="px-4 py-3 font-mono text-gray-400">{sub.id}</td>
+                        <td className="px-4 py-3 text-gray-700">
+                          <div>{userName}</div>
+                          <div className="text-xs text-gray-400 font-mono">{sub.telegram_id}</div>
+                        </td>
+                        <td className="px-4 py-3 text-gray-700">{sub.plan}</td>
+                        <td className="px-4 py-3">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                            METHOD_STYLES[sub.method] ?? 'bg-gray-100 text-gray-500'
+                          }`}>
+                            {sub.method}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                            STATUS_STYLES[sub.status] ?? 'bg-gray-100 text-gray-500'
+                          }`}>
+                            {sub.status}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-gray-500 text-xs font-mono">{sub.card_pan ?? '-'}</td>
+                        <td className="px-4 py-3 text-gray-500">{formatDate(sub.started_at)}</td>
+                        <td className="px-4 py-3 text-gray-500">{formatDate(sub.expires_at)}</td>
+                      </tr>
+
+                      {/* Expanded events row */}
+                      {isExpanded && (
+                        <tr key={`${sub.id}-events`}>
+                          <td colSpan={9} className="px-0 py-0">
+                            <div className="bg-gray-50 border-t border-b border-gray-200 px-8 py-4">
+                              <h4 className="text-sm font-semibold text-gray-700 mb-3">Subscription History</h4>
+
+                              {eventsLoading ? (
+                                <p className="text-sm text-gray-400">Loading history...</p>
+                              ) : events.length === 0 ? (
+                                <p className="text-sm text-gray-400">No history yet</p>
+                              ) : (
+                                <table className="w-full text-sm">
+                                  <thead className="text-gray-500 text-left text-xs">
+                                    <tr>
+                                      <th className="pb-2 pr-4 font-medium">Event</th>
+                                      <th className="pb-2 pr-4 font-medium">Plan</th>
+                                      <th className="pb-2 pr-4 font-medium">Method</th>
+                                      <th className="pb-2 pr-4 font-medium">Card</th>
+                                      <th className="pb-2 pr-4 font-medium">Amount</th>
+                                      <th className="pb-2 pr-4 font-medium">Expires</th>
+                                      <th className="pb-2 font-medium">Date</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-gray-200">
+                                    {events.map((ev) => (
+                                      <tr key={ev.id} className="text-gray-600">
+                                        <td className="py-2 pr-4">
+                                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                                            EVENT_STYLES[ev.event] ?? 'bg-gray-100 text-gray-500'
+                                          }`}>
+                                            {EVENT_LABELS[ev.event] ?? ev.event}
+                                          </span>
+                                        </td>
+                                        <td className="py-2 pr-4 text-xs">{ev.plan ?? '-'}</td>
+                                        <td className="py-2 pr-4">
+                                          {ev.method ? (
+                                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                                              METHOD_STYLES[ev.method] ?? 'bg-gray-100 text-gray-500'
+                                            }`}>
+                                              {ev.method}
+                                            </span>
+                                          ) : '-'}
+                                        </td>
+                                        <td className="py-2 pr-4 text-xs font-mono">{ev.card_pan ?? '-'}</td>
+                                        <td className="py-2 pr-4 text-xs">
+                                          {ev.amount ? `${ev.amount} ${ev.currency ?? ''}` : '-'}
+                                        </td>
+                                        <td className="py-2 pr-4 text-xs">{formatDate(ev.expires_at)}</td>
+                                        <td className="py-2 text-xs text-gray-400">{formatDateTime(ev.created_at)}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </>
                   );
                 })}
               </tbody>
