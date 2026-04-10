@@ -1,28 +1,13 @@
 import { createHmac } from 'node:crypto';
 import { logger } from '../utils/logger.js';
 import { escapeHtml } from '../utils/html.js';
+import { WAYFORPAY } from '../config.js';
 
 const WAYFORPAY_API_URL = 'https://api.wayforpay.com/api';
 
-function getMerchantAccount(): string {
-  return process.env.WAYFORPAY_MERCHANT_ACCOUNT ?? '';
-}
-
-function getSecretKey(): string {
-  return process.env.WAYFORPAY_SECRET_KEY ?? '';
-}
-
-function getMerchantDomain(): string {
-  return process.env.WAYFORPAY_MERCHANT_DOMAIN ?? '';
-}
-
-function getWebhookBaseUrl(): string {
-  return process.env.WEBHOOK_BASE_URL ?? '';
-}
-
 /** Generate HMAC-MD5 signature for WayForPay */
 function hmacMd5(data: string): string {
-  return createHmac('md5', getSecretKey())
+  return createHmac('md5', WAYFORPAY.secretKey)
     .update(data, 'utf8')
     .digest('hex');
 }
@@ -36,8 +21,8 @@ export function generatePurchaseSignature(params: {
   productName: string;
 }): string {
   const signString = [
-    getMerchantAccount(),
-    getMerchantDomain(),
+    WAYFORPAY.merchantAccount,
+    WAYFORPAY.merchantDomain,
     params.orderReference,
     params.orderDate,
     params.amount,
@@ -96,19 +81,19 @@ export async function createInvoice(params: {
     productName: params.productName,
   });
 
-  const serviceUrl = `${getWebhookBaseUrl()}/api/wayforpay/callback`;
-  const returnUrl = `${getWebhookBaseUrl()}/pay/success`;
+  const serviceUrl = `${WAYFORPAY.webhookBaseUrl}/api/wayforpay/callback`;
+  const returnUrl = `${WAYFORPAY.webhookBaseUrl}/pay/success`;
 
   const body = {
     transactionType: 'CREATE_INVOICE',
-    merchantAccount: getMerchantAccount(),
-    merchantDomainName: getMerchantDomain(),
+    merchantAccount: WAYFORPAY.merchantAccount,
+    merchantDomainName: WAYFORPAY.merchantDomain,
     merchantAuthType: 'SimpleSignature',
     merchantSignature: signature,
     apiVersion: 1,
     orderReference: params.orderReference,
     orderDate,
-    orderTimeout: 86400,
+    orderTimeout: 3600,
     amount: params.amount,
     currency: params.currency,
     productName: [params.productName],
@@ -147,13 +132,13 @@ export async function createInvoice(params: {
 
 /** Remove (cancel) a WayForPay invoice so the payment link becomes inactive */
 export async function removeInvoice(orderReference: string): Promise<boolean> {
-  const signString = [getMerchantAccount(), orderReference].join(';');
+  const signString = [WAYFORPAY.merchantAccount, orderReference].join(';');
   const signature = hmacMd5(signString);
 
   const body = {
     apiVersion: 1,
     transactionType: 'REMOVE_INVOICE',
-    merchantAccount: getMerchantAccount(),
+    merchantAccount: WAYFORPAY.merchantAccount,
     orderReference,
     merchantSignature: signature,
   };
@@ -203,8 +188,8 @@ export async function chargeWithToken(params: {
 
   const body = {
     transactionType: 'CHARGE',
-    merchantAccount: getMerchantAccount(),
-    merchantDomainName: getMerchantDomain(),
+    merchantAccount: WAYFORPAY.merchantAccount,
+    merchantDomainName: WAYFORPAY.merchantDomain,
     merchantTransactionType: 'SALE',
     merchantTransactionSecureType: 'NON3DS',
     merchantSignature: signature,

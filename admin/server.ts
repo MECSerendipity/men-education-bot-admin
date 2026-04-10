@@ -272,7 +272,12 @@ app.get(
   { preHandler: [authenticate] },
   async (_request, reply) => {
     try {
-      const result = await dbPool.query('SELECT * FROM price_offers ORDER BY telegram_id');
+      const result = await dbPool.query(
+        `SELECT po.*, u.id AS user_id, u.username
+         FROM price_offers po
+         LEFT JOIN users u ON u.telegram_id = po.telegram_id::bigint
+         ORDER BY po.telegram_id`,
+      );
       return result.rows;
     } catch (err) {
       app.log.error(err, 'Failed to fetch offers');
@@ -288,8 +293,17 @@ app.post<{ Body: { telegram_id: string } }>(
   async (request, reply) => {
     try {
       const { telegram_id } = request.body;
-      if (!telegram_id) {
-        return reply.status(400).send({ error: 'telegram_id is required' });
+      if (!telegram_id || !/^\d+$/.test(String(telegram_id))) {
+        return reply.status(400).send({ error: 'Telegram ID must be a number' });
+      }
+
+      // Check if user exists in our system
+      const userCheck = await dbPool.query(
+        'SELECT 1 FROM users WHERE telegram_id = $1 LIMIT 1',
+        [telegram_id],
+      );
+      if (userCheck.rows.length === 0) {
+        return reply.status(404).send({ error: 'User not found in the system' });
       }
 
       // Check if offers already exist
@@ -472,20 +486,20 @@ app.get<{
   }
 );
 
-/** GET /api/subscriptions/:telegramId/events — subscription event history for a user */
+/** GET /api/subscriptions/:subscriptionId/events — subscription event history */
 app.get<{
-  Params: { telegramId: string };
+  Params: { subscriptionId: string };
 }>(
-  '/api/subscriptions/:telegramId/events',
+  '/api/subscriptions/:subscriptionId/events',
   { preHandler: [authenticate] },
   async (request, reply) => {
     try {
-      const telegramId = request.params.telegramId;
+      const subscriptionId = request.params.subscriptionId;
       const result = await dbPool.query(
         `SELECT * FROM subscription_events
-         WHERE telegram_id = $1
+         WHERE subscription_id = $1
          ORDER BY created_at DESC`,
-        [telegramId],
+        [subscriptionId],
       );
       return { events: result.rows };
     } catch (err) {
@@ -550,7 +564,8 @@ app.get<{
            COUNT(*) FILTER (WHERE t.status = 'Pending') AS total_pending,
            COUNT(*) FILTER (WHERE t.status = 'Declined') AS total_declined,
            COUNT(*) FILTER (WHERE t.status = 'WaitingConfirmation') AS total_waiting,
-           COUNT(*) FILTER (WHERE t.status NOT IN ('Approved', 'Pending', 'Declined', 'WaitingConfirmation')) AS total_other
+           COUNT(*) FILTER (WHERE t.status = 'Cancelled') AS total_cancelled,
+           COUNT(*) FILTER (WHERE t.status NOT IN ('Approved', 'Pending', 'Declined', 'WaitingConfirmation', 'Cancelled')) AS total_other
          FROM transactions t
          LEFT JOIN users u ON u.telegram_id = t.telegram_id
          ${searchWhere}`,
@@ -562,6 +577,7 @@ app.get<{
         Pending: Number(countsResult.rows[0].total_pending),
         Declined: Number(countsResult.rows[0].total_declined),
         WaitingConfirmation: Number(countsResult.rows[0].total_waiting),
+        Cancelled: Number(countsResult.rows[0].total_cancelled),
         other: Number(countsResult.rows[0].total_other),
       };
 
@@ -578,7 +594,7 @@ app.get<{
          FROM transactions t
          LEFT JOIN users u ON u.telegram_id = t.telegram_id
          ${where}
-         ORDER BY t.created_at DESC
+         ORDER BY t.id DESC
          LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
         [...params, limit, offset],
       );
@@ -598,6 +614,314 @@ app.get<{
   }
 );
 
+/* ---------- Statistics API ---------- */
+
+/** GET /api/statistics — aggregated dashboard statistics with optional date range */
+app.get<{ Querystring: { from?: string; to?: string } }>(
+  '/api/statistics',
+  { preHandler: [authenticate] },
+  async (request, reply) => {
+    try {
+      const { from, to } = request.query;
+
+      // Build date boundaries — null means no limit
+      const dateFrom = from || null;  // e.g. '2026-04-10'
+      const dateTo = to || null;      // e.g. '2026-04-10' — will use < dateTo + 1 day
+
+      const [usersResult, revenueResult, subscriptionsResult, eventsResult] = await Promise.all([
+        // 1. Users stats — total is always all-time, newPeriod respects date filter
+        dbPool.query(
+          `SELECT
+            COUNT(*) AS total_users,
+            COUNT(*) FILTER (WHERE
+              ($1::date IS NULL OR created_at >= $1::date)
+              AND ($2::date IS NULL OR created_at < $2::date + INTERVAL '1 day')
+            ) AS new_period,
+            COUNT(*) FILTER (WHERE is_subscribed = TRUE) AS active_subscribers
+          FROM users`,
+          [dateFrom, dateTo],
+        ),
+
+        // 2. Revenue stats — only approved transactions within date range
+        dbPool.query(
+          `SELECT
+            COALESCE(SUM(amount) FILTER (WHERE currency = 'UAH'), 0) AS total_uah,
+            COALESCE(SUM(amount) FILTER (WHERE currency = 'USDT'), 0) AS total_usdt,
+            COALESCE(AVG(amount) FILTER (WHERE currency = 'UAH'), 0) AS avg_check_uah,
+            COALESCE(AVG(amount) FILTER (WHERE currency = 'USDT'), 0) AS avg_check_usdt,
+            COUNT(*) AS approved_count
+          FROM transactions
+          WHERE status = 'Approved'
+            AND ($1::date IS NULL OR created_at >= $1::date)
+            AND ($2::date IS NULL OR created_at < $2::date + INTERVAL '1 day')`,
+          [dateFrom, dateTo],
+        ),
+
+        // 3. Subscriptions stats — current state, not filtered by date
+        dbPool.query(
+          `SELECT
+            COUNT(*) FILTER (WHERE status = 'Active') AS active,
+            COUNT(*) FILTER (WHERE status = 'Expired') AS expired,
+            COUNT(*) FILTER (WHERE status = 'Cancelled') AS cancelled,
+            COUNT(*) FILTER (WHERE status = 'Active' AND plan = 'card_1m') AS plan_card_1m,
+            COUNT(*) FILTER (WHERE status = 'Active' AND plan = 'card_6m') AS plan_card_6m,
+            COUNT(*) FILTER (WHERE status = 'Active' AND plan = 'card_12m') AS plan_card_12m,
+            COUNT(*) FILTER (WHERE status = 'Active' AND plan = 'crypto_1m') AS plan_crypto_1m,
+            COUNT(*) FILTER (WHERE status = 'Active' AND plan = 'crypto_6m') AS plan_crypto_6m,
+            COUNT(*) FILTER (WHERE status = 'Active' AND plan = 'crypto_12m') AS plan_crypto_12m,
+            COUNT(*) FILTER (WHERE status = 'Active' AND method = 'card') AS method_card,
+            COUNT(*) FILTER (WHERE status = 'Active' AND method = 'crypto') AS method_crypto
+          FROM subscriptions`,
+        ),
+
+        // 4. Events + declined — filtered by date range
+        dbPool.query(
+          `SELECT
+            (SELECT COUNT(*) FROM subscription_events
+             WHERE event = 'created'
+               AND ($1::date IS NULL OR created_at >= $1::date)
+               AND ($2::date IS NULL OR created_at < $2::date + INTERVAL '1 day')
+            ) AS new_period,
+            (SELECT COUNT(*) FROM subscription_events
+             WHERE event = 'renewed'
+               AND ($1::date IS NULL OR created_at >= $1::date)
+               AND ($2::date IS NULL OR created_at < $2::date + INTERVAL '1 day')
+            ) AS renewals,
+            (SELECT COUNT(*) FROM subscription_events
+             WHERE event = 'created'
+               AND ($1::date IS NULL OR created_at >= $1::date)
+               AND ($2::date IS NULL OR created_at < $2::date + INTERVAL '1 day')
+            ) AS first_payments,
+            (SELECT COUNT(*) FROM subscription_events
+             WHERE event = 'expired'
+               AND ($1::date IS NULL OR created_at >= $1::date)
+               AND ($2::date IS NULL OR created_at < $2::date + INTERVAL '1 day')
+            ) AS churn,
+            (SELECT COUNT(*) FROM transactions
+             WHERE status = 'Declined'
+               AND ($1::date IS NULL OR created_at >= $1::date)
+               AND ($2::date IS NULL OR created_at < $2::date + INTERVAL '1 day')
+            ) AS declined_count`,
+          [dateFrom, dateTo],
+        ),
+      ]);
+
+      const u = usersResult.rows[0];
+      const r = revenueResult.rows[0];
+      const s = subscriptionsResult.rows[0];
+      const e = eventsResult.rows[0];
+
+      const totalUsers = Number(u.total_users);
+      const activeSubscribers = Number(u.active_subscribers);
+      const approvedCount = Number(r.approved_count);
+      const declinedCount = Number(e.declined_count);
+      const totalTransactions = approvedCount + declinedCount;
+
+      return {
+        users: {
+          total: totalUsers,
+          newPeriod: Number(u.new_period),
+          activeSubscribers,
+          conversionRate: totalUsers > 0 ? Math.round((activeSubscribers / totalUsers) * 10000) / 100 : 0,
+        },
+        revenue: {
+          totalUah: Number(r.total_uah),
+          totalUsdt: Number(r.total_usdt),
+          avgCheckUah: Math.round(Number(r.avg_check_uah) * 100) / 100,
+          avgCheckUsdt: Math.round(Number(r.avg_check_usdt) * 100) / 100,
+          approvedCount,
+          declinedCount,
+          successRate: totalTransactions > 0 ? Math.round((approvedCount / totalTransactions) * 10000) / 100 : 0,
+        },
+        subscriptions: {
+          active: Number(s.active),
+          expired: Number(s.expired),
+          cancelled: Number(s.cancelled),
+          byPlan: {
+            card_1m: Number(s.plan_card_1m),
+            card_6m: Number(s.plan_card_6m),
+            card_12m: Number(s.plan_card_12m),
+            crypto_1m: Number(s.plan_crypto_1m),
+            crypto_6m: Number(s.plan_crypto_6m),
+            crypto_12m: Number(s.plan_crypto_12m),
+          },
+          byMethod: {
+            card: Number(s.method_card),
+            crypto: Number(s.method_crypto),
+          },
+          newPeriod: Number(e.new_period),
+          renewals: Number(e.renewals),
+          firstPayments: Number(e.first_payments),
+          churn: Number(e.churn),
+        },
+      };
+    } catch (err) {
+      app.log.error(err, 'Failed to fetch statistics');
+      return reply.status(500).send({ error: 'Failed to load statistics' });
+    }
+  }
+);
+
+/* ---------- Broadcast Buttons API ---------- */
+
+/** GET /api/broadcast/buttons — list all saved buttons */
+app.get(
+  '/api/broadcast/buttons',
+  { preHandler: [authenticate] },
+  async (_request, reply) => {
+    try {
+      const result = await dbPool.query('SELECT * FROM broadcast_buttons ORDER BY id');
+      return result.rows;
+    } catch (err) {
+      app.log.error(err, 'Failed to fetch broadcast buttons');
+      return reply.status(500).send({ error: 'Failed to load buttons' });
+    }
+  }
+);
+
+/** POST /api/broadcast/buttons — create a new button */
+app.post<{ Body: { button_name: string; link: string } }>(
+  '/api/broadcast/buttons',
+  { preHandler: [authenticate] },
+  async (request, reply) => {
+    try {
+      const { button_name, link } = request.body;
+      if (!button_name?.trim() || !link?.trim()) {
+        return reply.status(400).send({ error: 'button_name and link are required' });
+      }
+      const result = await dbPool.query(
+        'INSERT INTO broadcast_buttons (button_name, link) VALUES ($1, $2) RETURNING *',
+        [button_name.trim(), link.trim()],
+      );
+      return result.rows[0];
+    } catch (err) {
+      app.log.error(err, 'Failed to create broadcast button');
+      return reply.status(500).send({ error: 'Failed to create button' });
+    }
+  }
+);
+
+/** PUT /api/broadcast/buttons/:id — update a button */
+app.put<{ Params: { id: string }; Body: { button_name?: string; link?: string } }>(
+  '/api/broadcast/buttons/:id',
+  { preHandler: [authenticate] },
+  async (request, reply) => {
+    try {
+      const { id } = request.params;
+      const { button_name, link } = request.body;
+      const result = await dbPool.query(
+        `UPDATE broadcast_buttons
+         SET button_name = COALESCE($1, button_name),
+             link = COALESCE($2, link)
+         WHERE id = $3 RETURNING *`,
+        [button_name?.trim() || null, link?.trim() || null, id],
+      );
+      if (result.rows.length === 0) {
+        return reply.status(404).send({ error: 'Button not found' });
+      }
+      return result.rows[0];
+    } catch (err) {
+      app.log.error(err, 'Failed to update broadcast button');
+      return reply.status(500).send({ error: 'Failed to update button' });
+    }
+  }
+);
+
+/** DELETE /api/broadcast/buttons/:id — delete a button */
+app.delete<{ Params: { id: string } }>(
+  '/api/broadcast/buttons/:id',
+  { preHandler: [authenticate] },
+  async (request, reply) => {
+    try {
+      const { id } = request.params;
+      const result = await dbPool.query('DELETE FROM broadcast_buttons WHERE id = $1', [id]);
+      if ((result.rowCount ?? 0) === 0) {
+        return reply.status(404).send({ error: 'Button not found' });
+      }
+      return { success: true };
+    } catch (err) {
+      app.log.error(err, 'Failed to delete broadcast button');
+      return reply.status(500).send({ error: 'Failed to delete button' });
+    }
+  }
+);
+
+/* ---------- Broadcast Send API ---------- */
+
+const BOT_TOKEN = process.env.BOT_TOKEN ?? '';
+
+/** POST /api/broadcast/send — send message with inline buttons to a chat */
+app.post<{
+  Body: {
+    chatId: string;
+    text: string;
+    buttons?: { text: string; url: string; row: number }[];
+    threadId?: number;
+  };
+}>(
+  '/api/broadcast/send',
+  { preHandler: [authenticate] },
+  async (request, reply) => {
+    try {
+      const { chatId, text, buttons, threadId } = request.body;
+
+      if (!chatId || !text?.trim()) {
+        return reply.status(400).send({ error: 'chatId and text are required' });
+      }
+
+      if (!BOT_TOKEN) {
+        return reply.status(500).send({ error: 'BOT_TOKEN not configured' });
+      }
+
+      // Build inline keyboard from buttons array
+      let inlineKeyboard: { text: string; url: string }[][] | undefined;
+      if (buttons && buttons.length > 0) {
+        const rows = new Map<number, { text: string; url: string }[]>();
+        for (const btn of buttons) {
+          if (!btn.text?.trim() || !btn.url?.trim()) continue;
+          const row = btn.row ?? 0;
+          if (!rows.has(row)) rows.set(row, []);
+          rows.get(row)!.push({ text: btn.text.trim(), url: btn.url.trim() });
+        }
+        inlineKeyboard = [...rows.entries()]
+          .sort(([a], [b]) => a - b)
+          .map(([, btns]) => btns);
+      }
+
+      const body: Record<string, unknown> = {
+        chat_id: chatId,
+        text: text.trim(),
+        parse_mode: 'HTML',
+      };
+
+      if (threadId) {
+        body.message_thread_id = threadId;
+      }
+
+      if (inlineKeyboard && inlineKeyboard.length > 0) {
+        body.reply_markup = JSON.stringify({ inline_keyboard: inlineKeyboard });
+      }
+
+      const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      const data = await res.json() as { ok: boolean; description?: string };
+
+      if (!data.ok) {
+        return reply.status(400).send({ error: data.description ?? 'Failed to send message' });
+      }
+
+      return { success: true };
+    } catch (err) {
+      app.log.error(err, 'Failed to send broadcast');
+      return reply.status(500).send({ error: 'Failed to send message' });
+    }
+  }
+);
+
 /* ---------- Texts API ---------- */
 
 /** Path to bot texts JSON file */
@@ -606,7 +930,11 @@ const TEXTS_FILE = join(__dirname, '..', 'src', 'texts', 'texts.json');
 /** Read all texts from the JSON file */
 async function loadTexts(): Promise<Record<string, string>> {
   const content = await readFile(TEXTS_FILE, 'utf-8');
-  return JSON.parse(content);
+  try {
+    return JSON.parse(content);
+  } catch {
+    throw new Error(`Failed to parse texts.json: invalid JSON`);
+  }
 }
 
 /** GET /api/texts — returns all bot texts as key-value pairs */

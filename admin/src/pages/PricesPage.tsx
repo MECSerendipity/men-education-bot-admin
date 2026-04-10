@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useAuth } from '../hooks/useAuth';
 
 /* ─── Types ─── */
 
@@ -13,6 +14,8 @@ interface PriceRow {
 interface PriceOfferRow {
   id: number;
   telegram_id: string;
+  user_id: number | null;
+  username: string | null;
   prices: Record<string, PriceRow>;
   created_at: string;
   updated_at: string;
@@ -164,27 +167,22 @@ function InlineEditor({
   );
 }
 
-/* ─── Plan Card (Global) ─── */
+/* ─── Plan Card (Global) — display only ─── */
 
 function PlanCard({
   duration,
   cardPrice,
   cryptoPrice,
-  onSaveAmount,
-  onSaveDisplayName,
+  onEdit,
 }: {
   duration: typeof DURATIONS[number];
   cardPrice?: PriceRow;
   cryptoPrice?: PriceRow;
-  onSaveAmount: (key: string, amount: number) => Promise<void>;
-  onSaveDisplayName: (key: string, name: string) => Promise<void>;
+  onEdit: () => void;
 }) {
   const borderColor = duration.accent === 'amber' ? 'border-amber-200' : duration.accent === 'blue' ? 'border-blue-200' : 'border-gray-200';
   const headerBg = duration.accent === 'amber' ? 'bg-amber-50' : duration.accent === 'blue' ? 'bg-blue-50' : 'bg-gray-50';
   const headerText = duration.accent === 'amber' ? 'text-amber-800' : duration.accent === 'blue' ? 'text-blue-800' : 'text-gray-700';
-  const badge = duration.accent === 'amber'
-    ? <span className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider bg-amber-200 text-amber-800 rounded-full">Popular</span>
-    : null;
 
   const displayName = cardPrice?.display_name ?? cryptoPrice?.display_name ?? '?';
 
@@ -193,69 +191,195 @@ function PlanCard({
       {/* Header */}
       <div className={`px-5 py-4 ${headerBg} border-b ${borderColor}`}>
         <div className="flex items-center justify-between">
-          <div>
-            <div className="flex items-center gap-2">
-              <h3 className={`text-lg font-bold ${headerText}`}>{duration.label}</h3>
-              {badge}
-            </div>
-            <div className="mt-1">
-              <InlineEditor
-                value={displayName}
-                onSave={(v) => onSaveDisplayName(cardPrice?.key ?? cryptoPrice?.key ?? '', v)}
-              />
-            </div>
-          </div>
+          <h3 className={`text-lg font-bold ${headerText}`}>{duration.label}</h3>
           <span className="text-xs text-gray-400 font-mono">{cardPrice?.days ?? cryptoPrice?.days ?? '?'} днів</span>
         </div>
       </div>
 
-      {/* Prices */}
-      <div className="divide-y divide-gray-100">
-        {/* Card */}
-        {cardPrice && (
-          <div className="px-5 py-4 flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <span className="flex items-center justify-center w-8 h-8 bg-blue-100 rounded-lg text-blue-600 text-sm">💳</span>
-              <div>
-                <div className="text-xs font-medium text-gray-500 uppercase tracking-wider">Картка</div>
-              </div>
-            </div>
-            <div className="text-right">
-              <InlineEditor
-                value={cardPrice.amount}
-                suffix={cardPrice.currency}
-                type="number"
-                onSave={async (v) => onSaveAmount(cardPrice.key, parseFloat(v))}
-              />
-            </div>
-          </div>
-        )}
+      {/* Info */}
+      <div className="px-5 py-4">
+        <div className="text-xs text-gray-400 uppercase tracking-wider mb-1">Назва</div>
+        <div className="text-sm font-medium text-gray-800 mb-4">{displayName}</div>
 
-        {/* Crypto */}
-        {cryptoPrice && (
-          <div className="px-5 py-4 flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <span className="flex items-center justify-center w-8 h-8 bg-orange-100 rounded-lg text-orange-600 text-sm">⚡</span>
-              <div>
-                <div className="text-xs font-medium text-gray-500 uppercase tracking-wider">Крипто</div>
-              </div>
+        <div className="space-y-3">
+          {cardPrice && (
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-gray-500">💳 Картка</span>
+              <span className="text-sm font-semibold text-gray-800">{Number(cardPrice.amount).toLocaleString()} {cardPrice.currency}</span>
             </div>
-            <div className="text-right">
-              <InlineEditor
-                value={cryptoPrice.amount}
-                suffix={cryptoPrice.currency}
-                type="number"
-                onSave={async (v) => onSaveAmount(cryptoPrice.key, parseFloat(v))}
-              />
+          )}
+          {cryptoPrice && (
+            <div className="flex items-center justify-between">
+              <span className="text-sm text-gray-500">⚡ Крипто</span>
+              <span className="text-sm font-semibold text-gray-800">{Number(cryptoPrice.amount).toLocaleString()} {cryptoPrice.currency}</span>
             </div>
-          </div>
-        )}
+          )}
+        </div>
+
+        <button
+          onClick={onEdit}
+          className="mt-4 w-full flex items-center justify-center gap-1.5 px-4 py-2.5 text-sm font-medium
+                     text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 cursor-pointer transition-colors"
+        >
+          <PencilIcon />
+          Редагувати
+        </button>
       </div>
     </div>
   );
 }
 
-/* ─── Offer Card ─── */
+/* ─── Plan Edit Modal ─── */
+
+function PlanEditModal({
+  duration,
+  cardPrice,
+  cryptoPrice,
+  onSaveAmount,
+  onSaveDisplayName,
+  onClose,
+}: {
+  duration: typeof DURATIONS[number];
+  cardPrice?: PriceRow;
+  cryptoPrice?: PriceRow;
+  onSaveAmount: (key: string, amount: number) => Promise<void>;
+  onSaveDisplayName: (key: string, name: string) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [displayName, setDisplayName] = useState(cardPrice?.display_name ?? cryptoPrice?.display_name ?? '');
+  const [cardAmount, setCardAmount] = useState(String(cardPrice?.amount ?? ''));
+  const [cryptoAmount, setCryptoAmount] = useState(String(cryptoPrice?.amount ?? ''));
+  const [saving, setSaving] = useState(false);
+
+  const isValidAmount = (val: string) => /^\d+(\.\d+)?$/.test(val) && parseFloat(val) > 0;
+
+  const isValid =
+    displayName.trim().length > 0 &&
+    (!cardPrice || isValidAmount(cardAmount)) &&
+    (!cryptoPrice || isValidAmount(cryptoAmount));
+
+  function handleAmountInput(setter: (v: string) => void) {
+    return (e: React.ChangeEvent<HTMLInputElement>) => {
+      const val = e.target.value;
+      if (val === '' || /^\d*\.?\d*$/.test(val)) setter(val);
+    };
+  }
+
+  async function handleSave() {
+    if (!isValid) return;
+    setSaving(true);
+    try {
+      const origName = cardPrice?.display_name ?? cryptoPrice?.display_name ?? '';
+      if (displayName.trim() !== origName) {
+        await onSaveDisplayName(cardPrice?.key ?? cryptoPrice?.key ?? '', displayName.trim());
+      }
+      if (cardPrice && cardAmount !== String(cardPrice.amount)) {
+        await onSaveAmount(cardPrice.key, parseFloat(cardAmount));
+      }
+      if (cryptoPrice && cryptoAmount !== String(cryptoPrice.amount)) {
+        await onSaveAmount(cryptoPrice.key, parseFloat(cryptoAmount));
+      }
+      onClose();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4" onClick={(e) => e.stopPropagation()}>
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-gray-200">
+          <h3 className="text-lg font-bold text-gray-900">Редагувати — {duration.label}</h3>
+        </div>
+
+        {/* Body */}
+        <div className="px-6 py-5 space-y-4">
+          {/* Display name */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Назва</label>
+            <input
+              type="text"
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              className={`w-full px-3 py-2.5 text-sm border rounded-lg
+                         focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent
+                         ${!displayName.trim() ? 'border-red-300 bg-red-50' : 'border-gray-200'}`}
+              autoFocus
+            />
+            {!displayName.trim() && (
+              <p className="text-xs text-red-500 mt-1">Назва не може бути пустою</p>
+            )}
+          </div>
+
+          {/* Card price */}
+          {cardPrice && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                💳 Картка ({cardPrice.currency})
+              </label>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={cardAmount}
+                onChange={handleAmountInput(setCardAmount)}
+                className={`w-full px-3 py-2.5 text-sm border rounded-lg
+                           focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent
+                           ${cardAmount && !isValidAmount(cardAmount) ? 'border-red-300 bg-red-50' : 'border-gray-200'}`}
+              />
+              {cardAmount && !isValidAmount(cardAmount) && (
+                <p className="text-xs text-red-500 mt-1">Введіть коректне число більше 0</p>
+              )}
+            </div>
+          )}
+
+          {/* Crypto price */}
+          {cryptoPrice && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                ⚡ Крипто ({cryptoPrice.currency})
+              </label>
+              <input
+                type="text"
+                inputMode="decimal"
+                value={cryptoAmount}
+                onChange={handleAmountInput(setCryptoAmount)}
+                className={`w-full px-3 py-2.5 text-sm border rounded-lg
+                           focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent
+                           ${cryptoAmount && !isValidAmount(cryptoAmount) ? 'border-red-300 bg-red-50' : 'border-gray-200'}`}
+              />
+              {cryptoAmount && !isValidAmount(cryptoAmount) && (
+                <p className="text-xs text-red-500 mt-1">Введіть коректне число більше 0</p>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-gray-200 grid grid-cols-2 gap-3">
+          <button
+            onClick={handleSave}
+            disabled={saving || !isValid}
+            className="px-4 py-2.5 text-sm font-medium text-white bg-blue-600 rounded-lg
+                       hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-colors"
+          >
+            {saving ? 'Зберігаю...' : 'Зберегти'}
+          </button>
+          <button
+            onClick={onClose}
+            disabled={saving}
+            className="px-4 py-2.5 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg
+                       hover:bg-gray-200 disabled:opacity-50 cursor-pointer transition-colors"
+          >
+            Скасувати
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Offer Card — collapsible ─── */
 
 function OfferCard({
   offer,
@@ -268,123 +392,272 @@ function OfferCard({
   onSave: (telegramId: string, key: string, amount: number) => Promise<void>;
   onDelete: (telegramId: string) => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+
   const createdDate = new Date(offer.created_at).toLocaleDateString('uk-UA', { day: 'numeric', month: 'short', year: 'numeric' });
 
+  // Summary: count how many prices differ from global
+  const diffCount = DURATIONS.reduce((count, dur) => {
+    const cardOffer = offer.prices[dur.card];
+    const cryptoOffer = offer.prices[dur.crypto];
+    const cardGlobal = globalPrices[dur.card];
+    const cryptoGlobal = globalPrices[dur.crypto];
+    if (cardOffer && cardGlobal && Number(cardOffer.amount) !== Number(cardGlobal.amount)) count++;
+    if (cryptoOffer && cryptoGlobal && Number(cryptoOffer.amount) !== Number(cryptoGlobal.amount)) count++;
+    return count;
+  }, 0);
+
   return (
-    <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
-      {/* Header */}
-      <div className="px-5 py-3.5 bg-gradient-to-r from-purple-50 to-indigo-50 border-b border-gray-200 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <span className="flex items-center justify-center w-9 h-9 bg-purple-100 rounded-full text-purple-600">
-            <UserIcon />
-          </span>
-          <div>
-            <span className="font-mono text-sm font-semibold text-gray-800">{offer.telegram_id}</span>
-            <div className="text-xs text-gray-400">створено {createdDate}</div>
+    <>
+      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+        {/* Header — always visible, clickable to expand */}
+        <div
+          className="px-5 py-3.5 flex items-center justify-between cursor-pointer hover:bg-gray-50 transition-colors"
+          onClick={() => setExpanded(!expanded)}
+        >
+          <div className="flex items-center gap-3">
+            <span className="flex items-center justify-center w-9 h-9 bg-purple-100 rounded-full text-purple-600">
+              <UserIcon />
+            </span>
+            <div>
+              <div className="flex items-center gap-2">
+                {offer.username ? (
+                  <span className="text-sm font-semibold text-gray-800">@{offer.username}</span>
+                ) : (
+                  <span className="font-mono text-sm text-gray-800">{offer.telegram_id}</span>
+                )}
+                {offer.user_id && <span className="text-xs text-gray-400">ID: {offer.user_id}</span>}
+                {diffCount > 0 && (
+                  <span className="px-1.5 py-0.5 text-[10px] font-semibold bg-purple-100 text-purple-700 rounded">
+                    {diffCount} змін
+                  </span>
+                )}
+              </div>
+              <div className="text-xs text-gray-400">
+                TG: {offer.telegram_id} · створено {createdDate}
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" strokeWidth={2}
+                 className={`w-4 h-4 text-gray-400 transition-transform ${expanded ? 'rotate-180' : ''}`}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+            </svg>
           </div>
         </div>
-        <button
-          onClick={() => onDelete(offer.telegram_id)}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50
-                     rounded-lg hover:bg-red-100 cursor-pointer transition-colors"
-        >
-          <TrashIcon />
-          Видалити
-        </button>
+
+        {/* Expanded content */}
+        {expanded && (
+          <div className="border-t border-gray-200">
+            {/* Price summary */}
+            <div className="px-5 py-4">
+              <div className="space-y-2">
+                {DURATIONS.map((dur) => {
+                  const cardOffer = offer.prices[dur.card];
+                  const cryptoOffer = offer.prices[dur.crypto];
+                  const cardGlobal = globalPrices[dur.card];
+                  const cryptoGlobal = globalPrices[dur.crypto];
+
+                  return (
+                    <div key={dur.key} className="flex items-center justify-between py-2 border-b border-gray-50 last:border-0">
+                      <span className="text-sm font-medium text-gray-600">{dur.label}</span>
+                      <div className="flex items-center gap-4 text-sm">
+                        {cardOffer && (
+                          <span className="flex items-center gap-1.5">
+                            <span className="text-gray-400">💳</span>
+                            <span className={`font-semibold ${cardGlobal && Number(cardOffer.amount) !== Number(cardGlobal.amount) ? 'text-purple-700' : 'text-gray-700'}`}>
+                              {Number(cardOffer.amount).toLocaleString()} {cardOffer.currency}
+                            </span>
+                          </span>
+                        )}
+                        {cryptoOffer && (
+                          <span className="flex items-center gap-1.5">
+                            <span className="text-gray-400">⚡</span>
+                            <span className={`font-semibold ${cryptoGlobal && Number(cryptoOffer.amount) !== Number(cryptoGlobal.amount) ? 'text-purple-700' : 'text-gray-700'}`}>
+                              {Number(cryptoOffer.amount).toLocaleString()} {cryptoOffer.currency}
+                            </span>
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Action buttons */}
+              <div className="grid grid-cols-2 gap-2 mt-4">
+                <button
+                  onClick={() => setShowEditModal(true)}
+                  className="flex items-center justify-center gap-1.5 px-4 py-2.5 text-sm font-medium
+                             text-purple-600 bg-purple-50 rounded-lg hover:bg-purple-100 cursor-pointer transition-colors"
+                >
+                  <PencilIcon />
+                  Редагувати
+                </button>
+                <button
+                  onClick={() => onDelete(offer.telegram_id)}
+                  className="flex items-center justify-center gap-1.5 px-4 py-2.5 text-sm font-medium
+                             text-red-600 bg-red-50 rounded-lg hover:bg-red-100 cursor-pointer transition-colors"
+                >
+                  <TrashIcon />
+                  Видалити
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Prices table */}
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-gray-100">
-              <th className="px-5 py-2.5 text-left text-xs font-medium text-gray-400 uppercase tracking-wider">План</th>
-              <th className="px-5 py-2.5 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">Глобальна ціна</th>
-              <th className="px-5 py-2.5 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">Персональна ціна</th>
-              <th className="px-5 py-2.5 text-right text-xs font-medium text-gray-400 uppercase tracking-wider">Різниця</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-50">
-            {DURATIONS.map((dur) => {
-              const cardOffer = offer.prices[dur.card];
-              const cryptoOffer = offer.prices[dur.crypto];
-              const cardGlobal = globalPrices[dur.card];
-              const cryptoGlobal = globalPrices[dur.crypto];
-
-              return [
-                cardOffer && (
-                  <OfferPriceRow
-                    key={dur.card}
-                    label={`💳 ${dur.label}`}
-                    globalAmount={Number(cardGlobal?.amount ?? 0)}
-                    offerAmount={Number(cardOffer.amount)}
-                    currency={cardOffer.currency}
-                    onSave={async (amount) => onSave(offer.telegram_id, dur.card, amount)}
-                  />
-                ),
-                cryptoOffer && (
-                  <OfferPriceRow
-                    key={dur.crypto}
-                    label={`⚡ ${dur.label}`}
-                    globalAmount={Number(cryptoGlobal?.amount ?? 0)}
-                    offerAmount={Number(cryptoOffer.amount)}
-                    currency={cryptoOffer.currency}
-                    onSave={async (amount) => onSave(offer.telegram_id, dur.crypto, amount)}
-                  />
-                ),
-              ];
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
+      {/* Edit Modal */}
+      {showEditModal && (
+        <OfferEditModal
+          offer={offer}
+          globalPrices={globalPrices}
+          onSave={onSave}
+          onClose={() => setShowEditModal(false)}
+        />
+      )}
+    </>
   );
 }
 
-function OfferPriceRow({
-  label,
-  globalAmount,
-  offerAmount,
-  currency,
+/* ─── Offer Edit Modal ─── */
+
+function OfferEditModal({
+  offer,
+  globalPrices,
   onSave,
+  onClose,
 }: {
-  label: string;
-  globalAmount: number;
-  offerAmount: number;
-  currency: string;
-  onSave: (amount: number) => Promise<void>;
+  offer: PriceOfferRow;
+  globalPrices: Record<string, PriceRow>;
+  onSave: (telegramId: string, key: string, amount: number) => Promise<void>;
+  onClose: () => void;
 }) {
-  const diff = offerAmount - globalAmount;
-  const diffPercent = globalAmount > 0 ? Math.round((diff / globalAmount) * 100) : 0;
-  const isDiscount = diff < 0;
-  const isSame = diff === 0;
+  const buildInitial = () => {
+    const result: Record<string, string> = {};
+    for (const [key, val] of Object.entries(offer.prices)) result[key] = String(val.amount);
+    return result;
+  };
+
+  const [editPrices, setEditPrices] = useState<Record<string, string>>(buildInitial);
+  const [saving, setSaving] = useState(false);
+
+  const isValidAmount = (val: string) => /^\d+(\.\d+)?$/.test(val) && parseFloat(val) > 0;
+  const isValid = Object.values(editPrices).every((v) => isValidAmount(v));
+
+  const hasChanges = Object.keys(editPrices).some(
+    (key) => editPrices[key] !== String(offer.prices[key]?.amount ?? ''),
+  );
+
+  async function handleSave() {
+    if (!isValid) return;
+    setSaving(true);
+    try {
+      for (const [key, val] of Object.entries(editPrices)) {
+        if (val !== String(offer.prices[key]?.amount ?? '')) {
+          await onSave(offer.telegram_id, key, parseFloat(val));
+        }
+      }
+      onClose();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const userName = offer.username ? `@${offer.username}` : offer.telegram_id;
 
   return (
-    <tr className="hover:bg-gray-50 transition-colors">
-      <td className="px-5 py-3 text-gray-700 font-medium">{label}</td>
-      <td className="px-5 py-3 text-right text-gray-400 tabular-nums">
-        {globalAmount.toLocaleString()} {currency}
-      </td>
-      <td className="px-5 py-3 text-right">
-        <InlineEditor
-          value={offerAmount}
-          suffix={currency}
-          type="number"
-          onSave={async (v) => onSave(parseFloat(v))}
-        />
-      </td>
-      <td className="px-5 py-3 text-right">
-        {isSame ? (
-          <span className="text-xs text-gray-300">—</span>
-        ) : (
-          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-            isDiscount ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
-          }`}>
-            {isDiscount ? '' : '+'}{diffPercent}%
-          </span>
-        )}
-      </td>
-    </tr>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 max-h-[90vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-gray-200">
+          <h3 className="text-lg font-bold text-gray-900">Редагувати ціни — {userName}</h3>
+        </div>
+
+        {/* Body */}
+        <div className="px-6 py-5 space-y-4">
+          {DURATIONS.map((dur) => {
+            const cardOffer = offer.prices[dur.card];
+            const cryptoOffer = offer.prices[dur.crypto];
+            const cardGlobal = globalPrices[dur.card];
+            const cryptoGlobal = globalPrices[dur.crypto];
+
+            return (
+              <div key={dur.key} className="border border-gray-200 rounded-lg p-4">
+                <h4 className="text-sm font-semibold text-gray-700 mb-3">{dur.label}</h4>
+                <div className="grid grid-cols-2 gap-3">
+                  {cardOffer && cardGlobal && (
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">
+                        💳 {cardGlobal.currency}
+                      </label>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={editPrices[dur.card] ?? ''}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (val === '' || /^\d*\.?\d*$/.test(val)) {
+                            setEditPrices((prev) => ({ ...prev, [dur.card]: val }));
+                          }
+                        }}
+                        className={`w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent
+                                   ${editPrices[dur.card] && !isValidAmount(editPrices[dur.card]) ? 'border-red-300 bg-red-50' : 'border-gray-200'}`}
+                      />
+                      <div className="text-xs text-gray-400 mt-0.5">глоб: {Number(cardGlobal.amount).toLocaleString()}</div>
+                    </div>
+                  )}
+                  {cryptoOffer && cryptoGlobal && (
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 mb-1">
+                        ⚡ {cryptoGlobal.currency}
+                      </label>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={editPrices[dur.crypto] ?? ''}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (val === '' || /^\d*\.?\d*$/.test(val)) {
+                            setEditPrices((prev) => ({ ...prev, [dur.crypto]: val }));
+                          }
+                        }}
+                        className={`w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent
+                                   ${editPrices[dur.crypto] && !isValidAmount(editPrices[dur.crypto]) ? 'border-red-300 bg-red-50' : 'border-gray-200'}`}
+                      />
+                      <div className="text-xs text-gray-400 mt-0.5">глоб: {Number(cryptoGlobal.amount).toLocaleString()}</div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-gray-200 grid grid-cols-2 gap-3">
+          <button
+            onClick={handleSave}
+            disabled={saving || !isValid || !hasChanges}
+            className="px-4 py-2.5 text-sm font-medium text-white bg-purple-600 rounded-lg
+                       hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-colors"
+          >
+            {saving ? 'Зберігаю...' : 'Зберегти'}
+          </button>
+          <button
+            onClick={onClose}
+            disabled={saving}
+            className="px-4 py-2.5 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg
+                       hover:bg-gray-200 disabled:opacity-50 cursor-pointer transition-colors"
+          >
+            Скасувати
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -398,19 +671,25 @@ export function PricesPage() {
   const [tab, setTab] = useState<'global' | 'offers'>('global');
   const [toast, setToast] = useState('');
 
-  // New offer form
+  // Edit plan modal
+  const [editingDuration, setEditingDuration] = useState<typeof DURATIONS[number] | null>(null);
+
+  // New offer modal
+  const [showOfferModal, setShowOfferModal] = useState(false);
   const [newTelegramId, setNewTelegramId] = useState('');
+  const [offerPrices, setOfferPrices] = useState<Record<string, string>>({});
+  const [offerError, setOfferError] = useState('');
   const [creatingOffer, setCreatingOffer] = useState(false);
 
-  const token = localStorage.getItem('admin_token');
+  const { token, headers } = useAuth();
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
       const [pricesRes, offersRes] = await Promise.all([
-        fetch('/api/prices', { headers: { Authorization: `Bearer ${token}` } }),
-        fetch('/api/prices/offers', { headers: { Authorization: `Bearer ${token}` } }),
+        fetch('/api/prices', { headers }),
+        fetch('/api/prices/offers', { headers }),
       ]);
       if (!pricesRes.ok) throw new Error('Failed to load prices');
       if (!offersRes.ok) throw new Error('Failed to load offers');
@@ -435,7 +714,7 @@ export function PricesPage() {
   async function handleSavePrice(key: string, amount: number) {
     const res = await fetch(`/api/prices/${encodeURIComponent(key)}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      headers: { 'Content-Type': 'application/json', ...headers },
       body: JSON.stringify({ amount }),
     });
     if (!res.ok) throw new Error('Failed to save');
@@ -447,7 +726,7 @@ export function PricesPage() {
   async function handleSaveDisplayName(key: string, display_name: string) {
     const res = await fetch(`/api/prices/${encodeURIComponent(key)}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      headers: { 'Content-Type': 'application/json', ...headers },
       body: JSON.stringify({ display_name }),
     });
     if (!res.ok) throw new Error('Failed to save');
@@ -455,25 +734,68 @@ export function PricesPage() {
     showToast('Назву оновлено');
   }
 
-  /** Create offers for a user */
+  /** Open the offer creation modal */
+  function openOfferModal() {
+    setNewTelegramId('');
+    setOfferError('');
+    // Pre-fill with current global prices
+    const initial: Record<string, string> = {};
+    for (const p of prices) initial[p.key] = String(p.amount);
+    setOfferPrices(initial);
+    setShowOfferModal(true);
+  }
+
+  function closeOfferModal() {
+    setShowOfferModal(false);
+    setOfferError('');
+  }
+
+  /** Create offers for a user with custom prices */
   async function handleCreateOffer() {
-    if (!newTelegramId.trim()) return;
+    if (!newTelegramId.trim() || !/^\d+$/.test(newTelegramId.trim())) {
+      setOfferError('Telegram ID має бути числом');
+      return;
+    }
+    // Validate all prices
+    for (const key of Object.keys(offerPrices)) {
+      const val = offerPrices[key];
+      if (!val || !/^\d+(\.\d+)?$/.test(val) || parseFloat(val) <= 0) {
+        setOfferError(`Невалідна ціна для ${key}`);
+        return;
+      }
+    }
+
     setCreatingOffer(true);
+    setOfferError('');
     try {
+      // Step 1: Create offer (copies global prices)
       const res = await fetch('/api/prices/offers', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json', ...headers },
         body: JSON.stringify({ telegram_id: newTelegramId.trim() }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || 'Failed to create offer');
       }
-      setNewTelegramId('');
+
+      // Step 2: Update each price that differs from global
+      for (const [key, val] of Object.entries(offerPrices)) {
+        const globalPrice = pricesMap[key];
+        if (globalPrice && String(globalPrice.amount) !== val) {
+          await fetch(`/api/prices/offers/${newTelegramId.trim()}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json', ...headers },
+            body: JSON.stringify({ key, amount: parseFloat(val) }),
+          });
+        }
+      }
+
+      closeOfferModal();
       await fetchData();
       showToast('Пропозицію створено');
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Error');
+      setOfferError(err instanceof Error ? err.message : 'Error');
     } finally {
       setCreatingOffer(false);
     }
@@ -483,7 +805,7 @@ export function PricesPage() {
   async function handleSaveOffer(telegramId: string, key: string, amount: number) {
     const res = await fetch(`/api/prices/offers/${telegramId}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      headers: { 'Content-Type': 'application/json', ...headers },
       body: JSON.stringify({ key, amount }),
     });
     if (!res.ok) throw new Error('Failed to save');
@@ -500,7 +822,7 @@ export function PricesPage() {
     if (!confirm(`Видалити пропозицію для ${telegramId}?`)) return;
     const res = await fetch(`/api/prices/offers/user/${telegramId}`, {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
+      headers,
     });
     if (!res.ok) throw new Error('Failed to delete');
     setOffers((prev) => prev.filter((o) => o.telegram_id !== telegramId));
@@ -579,7 +901,7 @@ export function PricesPage() {
       {tab === 'global' && (
         <div>
           <p className="text-sm text-gray-400 mb-6">
-            Ці ціни бачать всі нові юзери. Натисніть на значення щоб змінити.
+            Ці ціни бачать всі нові юзери. Натисніть "Редагувати" щоб змінити.
           </p>
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
@@ -589,11 +911,22 @@ export function PricesPage() {
                 duration={dur}
                 cardPrice={pricesMap[dur.card]}
                 cryptoPrice={pricesMap[dur.crypto]}
-                onSaveAmount={handleSavePrice}
-                onSaveDisplayName={handleSaveDisplayName}
+                onEdit={() => setEditingDuration(dur)}
               />
             ))}
           </div>
+
+          {/* Edit Plan Modal */}
+          {editingDuration && (
+            <PlanEditModal
+              duration={editingDuration}
+              cardPrice={pricesMap[editingDuration.card]}
+              cryptoPrice={pricesMap[editingDuration.crypto]}
+              onSaveAmount={handleSavePrice}
+              onSaveDisplayName={handleSaveDisplayName}
+              onClose={() => setEditingDuration(null)}
+            />
+          )}
 
           {/* Preview */}
           <div className="mt-8 p-5 bg-gray-50 border border-gray-200 rounded-xl">
@@ -622,27 +955,16 @@ export function PricesPage() {
             Персональні ціни для конкретних юзерів. Видаляються автоматично після оплати.
           </p>
 
-          {/* Create offer */}
-          <div className="flex items-center gap-3 mb-6 p-4 bg-white border border-dashed border-gray-300 rounded-xl">
-            <span className="text-gray-400"><PlusIcon /></span>
-            <input
-              type="text"
-              value={newTelegramId}
-              onChange={(e) => setNewTelegramId(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleCreateOffer()}
-              placeholder="Введіть Telegram ID"
-              className="flex-1 max-w-xs px-3 py-2 text-sm border border-gray-200 rounded-lg
-                         focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-            />
+          {/* Create offer button */}
+          <div className="mb-6">
             <button
-              onClick={handleCreateOffer}
-              disabled={creatingOffer || !newTelegramId.trim()}
-              className="px-4 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg
-                         hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-colors"
+              onClick={openOfferModal}
+              className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-white bg-purple-600 rounded-lg
+                         hover:bg-purple-700 cursor-pointer transition-colors"
             >
-              {creatingOffer ? 'Створюю...' : 'Створити пропозицію'}
+              <PlusIcon />
+              Створити пропозицію
             </button>
-            <span className="text-xs text-gray-400 hidden sm:inline">Скопіює поточні глобальні ціни</span>
           </div>
 
           {/* Offers list */}
@@ -667,6 +989,132 @@ export function PricesPage() {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Create Offer Modal */}
+      {showOfferModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={closeOfferModal}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 max-h-[90vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
+            {/* Modal header */}
+            <div className="px-6 py-4 border-b border-gray-200">
+              <h3 className="text-lg font-bold text-gray-900">Створити персональну пропозицію</h3>
+              <p className="text-sm text-gray-500 mt-1">Ціни скопійовані з глобальних. Змініть потрібні перед створенням.</p>
+            </div>
+
+            {/* Modal body */}
+            <div className="px-6 py-5 space-y-5">
+              {/* Telegram ID */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Telegram ID</label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={newTelegramId}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === '' || /^\d*$/.test(val)) { setNewTelegramId(val); setOfferError(''); }
+                  }}
+                  placeholder="Наприклад: 123456789"
+                  className={`w-full px-3 py-2.5 text-sm border rounded-lg
+                             focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent
+                             ${offerError && !newTelegramId.trim() ? 'border-red-300 bg-red-50' : 'border-gray-200'}`}
+                  autoFocus
+                />
+              </div>
+
+              {/* Prices */}
+              <div className="space-y-4">
+                {DURATIONS.map((dur) => {
+                  const cardGlobal = pricesMap[dur.card];
+                  const cryptoGlobal = pricesMap[dur.crypto];
+
+                  return (
+                    <div key={dur.key} className="border border-gray-200 rounded-lg p-4">
+                      <h4 className="text-sm font-semibold text-gray-700 mb-3">{dur.label}</h4>
+                      <div className="grid grid-cols-2 gap-3">
+                        {cardGlobal && (
+                          <div>
+                            <label className="block text-xs font-medium text-gray-500 mb-1">
+                              💳 Картка ({cardGlobal.currency})
+                            </label>
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              value={offerPrices[dur.card] ?? ''}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                if (val === '' || /^\d*\.?\d*$/.test(val)) {
+                                  setOfferPrices((prev) => ({ ...prev, [dur.card]: val }));
+                                }
+                              }}
+                              className={`w-full px-3 py-2 text-sm border rounded-lg
+                                         focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent
+                                         ${offerPrices[dur.card] !== undefined && offerPrices[dur.card] !== '' && !/^\d+(\.\d+)?$/.test(offerPrices[dur.card]) ? 'border-red-300 bg-red-50' : 'border-gray-200'}`}
+                            />
+                            <div className="text-xs text-gray-400 mt-0.5">
+                              Глобальна: {Number(cardGlobal.amount).toLocaleString()} {cardGlobal.currency}
+                            </div>
+                          </div>
+                        )}
+                        {cryptoGlobal && (
+                          <div>
+                            <label className="block text-xs font-medium text-gray-500 mb-1">
+                              ⚡ Крипто ({cryptoGlobal.currency})
+                            </label>
+                            <input
+                              type="text"
+                              inputMode="decimal"
+                              value={offerPrices[dur.crypto] ?? ''}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                if (val === '' || /^\d*\.?\d*$/.test(val)) {
+                                  setOfferPrices((prev) => ({ ...prev, [dur.crypto]: val }));
+                                }
+                              }}
+                              className={`w-full px-3 py-2 text-sm border rounded-lg
+                                         focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent
+                                         ${offerPrices[dur.crypto] !== undefined && offerPrices[dur.crypto] !== '' && !/^\d+(\.\d+)?$/.test(offerPrices[dur.crypto]) ? 'border-red-300 bg-red-50' : 'border-gray-200'}`}
+                            />
+                            <div className="text-xs text-gray-400 mt-0.5">
+                              Глобальна: {Number(cryptoGlobal.amount).toLocaleString()} {cryptoGlobal.currency}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Error */}
+              {offerError && (
+                <div className="px-3 py-2 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg">
+                  {offerError}
+                </div>
+              )}
+            </div>
+
+            {/* Modal footer */}
+            <div className="px-6 py-4 border-t border-gray-200 flex gap-3">
+              <button
+                onClick={handleCreateOffer}
+                disabled={creatingOffer || !newTelegramId.trim()}
+                className="flex-1 px-4 py-2.5 text-sm font-medium text-white bg-purple-600 rounded-lg
+                           hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-colors"
+              >
+                {creatingOffer ? 'Створюю...' : 'Створити пропозицію'}
+              </button>
+              <button
+                onClick={closeOfferModal}
+                disabled={creatingOffer}
+                className="flex-1 px-4 py-2.5 text-sm font-medium text-gray-600 bg-gray-100 rounded-lg
+                           hover:bg-gray-200 disabled:opacity-50 cursor-pointer transition-colors"
+              >
+                Скасувати
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

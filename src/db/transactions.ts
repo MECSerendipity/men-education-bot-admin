@@ -107,6 +107,19 @@ export async function hasPendingCryptoTransaction(telegramId: number): Promise<b
   return result.rows.length > 0;
 }
 
+/** Check if user has any previously approved transaction (to determine first payment) */
+export async function isFirstApprovedTransaction(telegramId: number, excludeOrderReference: string): Promise<boolean> {
+  const result = await db.query(
+    `SELECT 1 FROM transactions
+     WHERE telegram_id = $1
+       AND status = 'Approved'
+       AND order_reference != $2
+     LIMIT 1`,
+    [telegramId, excludeOrderReference],
+  );
+  return result.rows.length === 0;
+}
+
 /** Check if user has a pending card transaction (created in last 15 min) */
 export async function hasPendingCardTransaction(telegramId: number): Promise<boolean> {
   const result = await db.query(
@@ -114,7 +127,7 @@ export async function hasPendingCardTransaction(telegramId: number): Promise<boo
      WHERE telegram_id = $1
        AND method = 'card'
        AND status = 'Pending'
-       AND created_at > NOW() - INTERVAL '15 minutes'
+       AND created_at > NOW() - INTERVAL '10 minutes'
      LIMIT 1`,
     [telegramId],
   );

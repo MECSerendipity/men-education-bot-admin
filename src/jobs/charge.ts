@@ -4,6 +4,8 @@ import { chargeWithToken } from '../services/wayforpay.js';
 import { createTransaction, updateTransactionStatus, updateTransactionCard, updateTransactionDeclineReason } from '../db/transactions.js';
 import { activateSubscription, type Subscription } from '../db/subscriptions.js';
 import { logger } from '../utils/logger.js';
+import { sendPaymentNotification, buildPaymentSuccessMessage } from '../services/notifications.js';
+import { getUserByTelegramId } from '../db/users.js';
 
 interface PlanPrice {
   key: string;
@@ -58,7 +60,17 @@ export async function runCardChargeJob(bot: Telegraf): Promise<void> {
   for (const sub of subs) {
     const planPrice = getPlanPrice(sub);
     if (!planPrice) {
-      logger.warn('Charge job: no price found for plan', { telegramId: sub.telegram_id, plan: sub.plan });
+      logger.error('Charge job: CRITICAL — missing price for plan', {
+        subscriptionId: sub.id,
+        telegramId: sub.telegram_id,
+        plan: sub.plan,
+      });
+      try {
+        await bot.telegram.sendMessage(
+          sub.telegram_id,
+          '\u{26A0}\u{FE0F} Помилка автоматичного продовження підписки. Зверніся в підтримку.',
+        );
+      } catch { /* ignore send failure */ }
       continue;
     }
 
@@ -97,7 +109,7 @@ export async function runCardChargeJob(bot: Telegraf): Promise<void> {
       await updateTransactionCard(orderRef, sub.rec_token, sub.card_pan);
 
       const prices = sub.prices as Record<string, PlanPrice>;
-      await activateSubscription({
+      const subscription = await activateSubscription({
         telegramId: sub.telegram_id,
         plan: sub.plan,
         method: 'card',
@@ -111,17 +123,31 @@ export async function runCardChargeJob(bot: Telegraf): Promise<void> {
       logger.info('Charge job: success', { telegramId: sub.telegram_id, orderRef });
 
       try {
-        await bot.telegram.sendMessage(
-          sub.telegram_id,
-          `\u{1F504} Підписку автоматично продовжено!\n\n` +
-          `\u{1F4E6} ${productName}\n` +
-          `\u{1F4B0} ${planPrice.amount} ${planPrice.currency}\n` +
-          `\u{1F4B3} ${sub.card_pan ?? 'Картка'}\n\n` +
-          `Дякуємо за довіру!`,
-        );
+        const successText = buildPaymentSuccessMessage({
+          plan: sub.plan,
+          amount: planPrice.amount,
+          currency: planPrice.currency,
+          expiresAt: subscription.expires_at,
+        });
+        await bot.telegram.sendMessage(sub.telegram_id, successText);
       } catch (err) {
         logger.error('Charge job: failed to notify user', err);
       }
+
+      // Send card payment notification to admin channel
+      const user = await getUserByTelegramId(sub.telegram_id);
+      await sendPaymentNotification(bot, {
+        subscriptionId: subscription.id,
+        transactionId: tx.id,
+        userId: user?.id ?? 0,
+        telegramId: sub.telegram_id,
+        username: user?.username ?? null,
+        plan: sub.plan,
+        amount: planPrice.amount,
+        currency: planPrice.currency,
+        orderReference: orderRef,
+        method: 'card',
+      });
     } else {
       await updateTransactionStatus(orderRef, 'Declined');
       await updateTransactionDeclineReason(orderRef, result.reason ?? null, result.reasonCode ?? null);

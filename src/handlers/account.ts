@@ -1,7 +1,7 @@
 import { Telegraf } from 'telegraf';
 import { TEXTS } from '../texts/index.js';
 import { getUserByTelegramId, updateUserEmail } from '../db/users.js';
-import { getActiveSubscription } from '../db/subscriptions.js';
+import { getActiveSubscription, getCancelledSubscription } from '../db/subscriptions.js';
 import { escapeHtml } from '../utils/html.js';
 import { logger } from '../utils/logger.js';
 import { createTtlMap } from '../utils/ttl-map.js';
@@ -21,10 +21,13 @@ async function buildAccountText(
   user: { id: number; first_name: string; last_name?: string; username?: string },
   email?: string | null,
 ) {
-  const sub = await getActiveSubscription(user.id);
-  const subscriptionStatus = sub
-    ? `✅ Активна (до ${new Date(sub.expires_at).toLocaleDateString('uk-UA')})`
-    : '❌ Немає';
+  const activeSub = await getActiveSubscription(user.id);
+  const cancelledSub = !activeSub ? await getCancelledSubscription(user.id) : null;
+  const subscriptionStatus = activeSub
+    ? '\u{2705} Активна'
+    : cancelledSub
+      ? '\u{26A0}\u{FE0F} Скасована'
+      : '\u{274C} Немає';
 
   return [
     '<b>👤 Мій акаунт</b>',
@@ -54,26 +57,30 @@ function buildEmailFormText(error?: string) {
 }
 
 /** Build inline keyboard for account view */
-function buildAccountKeyboard(hasEmail: boolean) {
-  return {
-    inline_keyboard: [
-      hasEmail
-        ? [{ text: '✏️ Змінити email', callback_data: 'change_email' }]
-        : [{ text: '📧 Додати email', callback_data: 'add_email' }],
-    ],
-  };
+function buildAccountKeyboard(hasEmail: boolean, isCancelled: boolean) {
+  const row = [
+    hasEmail
+      ? { text: '\u{270F}\u{FE0F} Змінити email', callback_data: 'change_email' }
+      : { text: '\u{1F4E7} Додати email', callback_data: 'add_email' },
+  ];
+  if (isCancelled) {
+    row.push({ text: '\u{2705} Відновити підписку', callback_data: 'sub:reactivate' });
+  }
+  return { inline_keyboard: [row] };
 }
 
 /** Register "Мій акаунт" button handler */
 export function registerAccountHandler(bot: Telegraf) {
   bot.hears(TEXTS.BTN_ACCOUNT, async (ctx) => {
     const dbUser = await getUserByTelegramId(ctx.from.id);
+    const activeSub = await getActiveSubscription(ctx.from.id);
+    const cancelledSub = !activeSub ? await getCancelledSubscription(ctx.from.id) : null;
 
     await ctx.reply(
       await buildAccountText(ctx.from, dbUser?.email),
       {
         parse_mode: 'HTML',
-        reply_markup: buildAccountKeyboard(!!dbUser?.email),
+        reply_markup: buildAccountKeyboard(!!dbUser?.email, !!cancelledSub),
       },
     );
   });
@@ -105,12 +112,13 @@ export function registerAccountHandler(bot: Telegraf) {
     waitingForEmail.delete(ctx.from.id);
 
     const dbUser = await getUserByTelegramId(ctx.from.id);
+    const cancelled = await getCancelledSubscription(ctx.from.id);
 
     await ctx.editMessageText(
       await buildAccountText(ctx.from, dbUser?.email),
       {
         parse_mode: 'HTML',
-        reply_markup: buildAccountKeyboard(!!dbUser?.email),
+        reply_markup: buildAccountKeyboard(!!dbUser?.email, !!cancelled),
       },
     );
   });
@@ -142,11 +150,12 @@ export function registerAccountHandler(bot: Telegraf) {
         setTimeout(async () => {
           try {
             const dbUser = await getUserByTelegramId(ctx.from!.id);
+            const cancelled = await getCancelledSubscription(ctx.from!.id);
             await ctx.telegram.editMessageText(chatId, messageId, undefined,
               await buildAccountText(ctx.from!, dbUser?.email),
               {
                 parse_mode: 'HTML',
-                reply_markup: buildAccountKeyboard(true),
+                reply_markup: buildAccountKeyboard(true, !!cancelled),
               },
             );
           } catch (err) {

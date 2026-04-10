@@ -1,4 +1,16 @@
 import { useState, useEffect, useCallback } from 'react';
+import { formatDate, formatDateTime } from '../utils/format';
+import { SearchIcon } from '../components/Icons';
+import { Pagination } from '../components/Pagination';
+import { InfoTooltip } from '../components/Tooltip';
+import { STATUS_STYLES, METHOD_STYLES } from '../utils/styles';
+import { useAuth } from '../hooks/useAuth';
+
+const FILTER_TOOLTIPS: Record<string, string> = {
+  Active: 'Підписка активна, юзер має доступ до каналів. Auto-renewal спробує списати за 3 дні до закінчення.',
+  Expired: 'Підписка закінчилась і не була продовжена. Юзер втратив доступ до каналів і був кікнутий.',
+  Cancelled: 'Юзер скасував підписку вручну. Доступ зберігається до expires_at, потім кік.',
+};
 
 interface Subscription {
   id: number;
@@ -40,16 +52,6 @@ interface SubscriptionsResponse {
 
 type Filter = 'all' | 'Active' | 'Expired' | 'Cancelled';
 
-function SearchIcon() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
-         stroke="currentColor" strokeWidth={1.5} className="w-5 h-5">
-      <path strokeLinecap="round" strokeLinejoin="round"
-            d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
-    </svg>
-  );
-}
-
 function ChevronIcon({ open }: { open: boolean }) {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
@@ -58,37 +60,6 @@ function ChevronIcon({ open }: { open: boolean }) {
     </svg>
   );
 }
-
-function formatDate(dateStr: string | null): string {
-  if (!dateStr) return '-';
-  return new Date(dateStr).toLocaleDateString('uk-UA', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-  });
-}
-
-function formatDateTime(dateStr: string | null): string {
-  if (!dateStr) return '-';
-  return new Date(dateStr).toLocaleString('uk-UA', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-const STATUS_STYLES: Record<string, string> = {
-  Active: 'bg-green-100 text-green-700',
-  Expired: 'bg-gray-100 text-gray-500',
-  Cancelled: 'bg-red-100 text-red-600',
-};
-
-const METHOD_STYLES: Record<string, string> = {
-  card: 'bg-purple-100 text-purple-700',
-  crypto: 'bg-orange-100 text-orange-700',
-};
 
 const EVENT_STYLES: Record<string, string> = {
   created: 'bg-blue-100 text-blue-700',
@@ -122,22 +93,21 @@ export function SubscriptionsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  // Expandable rows: telegramId -> events
-  const [expandedId, setExpandedId] = useState<number | null>(null);
-  const [events, setEvents] = useState<SubscriptionEvent[]>([]);
-  const [eventsLoading, setEventsLoading] = useState(false);
+  // Expandable rows: subscriptionId -> events (multiple can be open)
+  const [expandedEvents, setExpandedEvents] = useState<Record<number, SubscriptionEvent[]>>({});
+  const [loadingEvents, setLoadingEvents] = useState<Set<number>>(new Set());
+  const { headers } = useAuth();
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     setError('');
-    const token = localStorage.getItem('admin_token');
 
     try {
-      const params = new URLSearchParams({ page: String(page), limit: '20', filter });
+      const params = new URLSearchParams({ page: String(page), limit: '10', filter });
       if (search.trim()) params.set('search', search.trim());
 
       const res = await fetch(`/api/subscriptions?${params}`, {
-        headers: { Authorization: `Bearer ${token}` },
+        headers,
       });
       if (!res.ok) throw new Error('Failed to load subscriptions');
 
@@ -156,28 +126,33 @@ export function SubscriptionsPage() {
   useEffect(() => { fetchData(); }, [fetchData]);
   useEffect(() => { setPage(1); }, [search, filter]);
 
-  const toggleExpand = async (telegramId: number) => {
-    if (expandedId === telegramId) {
-      setExpandedId(null);
-      setEvents([]);
+  const toggleExpand = async (subscriptionId: number) => {
+    if (subscriptionId in expandedEvents) {
+      setExpandedEvents((prev) => {
+        const next = { ...prev };
+        delete next[subscriptionId];
+        return next;
+      });
       return;
     }
 
-    setExpandedId(telegramId);
-    setEventsLoading(true);
-    const token = localStorage.getItem('admin_token');
+    setLoadingEvents((prev) => new Set(prev).add(subscriptionId));
 
     try {
-      const res = await fetch(`/api/subscriptions/${telegramId}/events`, {
-        headers: { Authorization: `Bearer ${token}` },
+      const res = await fetch(`/api/subscriptions/${subscriptionId}/events`, {
+        headers,
       });
       if (!res.ok) throw new Error('Failed to load events');
       const data = await res.json();
-      setEvents(data.events);
+      setExpandedEvents((prev) => ({ ...prev, [subscriptionId]: data.events }));
     } catch {
-      setEvents([]);
+      setExpandedEvents((prev) => ({ ...prev, [subscriptionId]: [] }));
     } finally {
-      setEventsLoading(false);
+      setLoadingEvents((prev) => {
+        const next = new Set(prev);
+        next.delete(subscriptionId);
+        return next;
+      });
     }
   };
 
@@ -189,14 +164,14 @@ export function SubscriptionsPage() {
   ];
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
+    <div className="flex flex-col h-full">
+      <div className="flex items-center justify-between mb-3">
         <h2 className="text-2xl font-bold text-gray-900">Subscriptions</h2>
         <span className="text-sm text-gray-500">{total} subscriptions total</span>
       </div>
 
       {/* Search */}
-      <div className="relative mb-4">
+      <div className="relative mb-2">
         <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
           <SearchIcon />
         </div>
@@ -212,23 +187,27 @@ export function SubscriptionsPage() {
       </div>
 
       {/* Filter buttons */}
-      <div className="flex gap-2 mb-6 flex-wrap">
+      <div className="flex gap-2 mb-3 flex-wrap items-center">
         {filterButtons.map((btn) => (
-          <button
-            key={btn.key}
-            onClick={() => setFilter(btn.key)}
-            className={`px-4 py-1.5 text-sm font-medium rounded-md cursor-pointer transition-colors ${
+          <div key={btn.key} className="relative">
+            <button
+              onClick={() => setFilter(btn.key)}
+              className={`px-4 py-1.5 text-sm font-medium rounded-md cursor-pointer transition-colors inline-flex items-center gap-1.5 ${
               filter === btn.key
                 ? 'bg-blue-600 text-white'
                 : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
             }`}
           >
-            {btn.label}
-          </button>
+              {btn.key !== 'all' && FILTER_TOOLTIPS[btn.key] && (
+                <InfoTooltip content={FILTER_TOOLTIPS[btn.key]} />
+              )}
+              {btn.label}
+            </button>
+          </div>
         ))}
       </div>
 
-      {error && <p className="text-red-600 mb-4">{error}</p>}
+      {error && <p className="text-red-600 mb-2">{error}</p>}
 
       {loading ? (
         <p className="text-gray-500">Loading...</p>
@@ -238,7 +217,7 @@ export function SubscriptionsPage() {
         </div>
       ) : (
         <>
-          <div className="overflow-x-auto border border-gray-200 rounded-lg">
+          <div className="overflow-auto border border-gray-200 rounded-lg flex-1 min-h-0">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-gray-600 text-left">
                 <tr>
@@ -258,13 +237,15 @@ export function SubscriptionsPage() {
                   const userName = sub.username
                     ? `@${sub.username}`
                     : [sub.first_name, sub.last_name].filter(Boolean).join(' ') || String(sub.telegram_id);
-                  const isExpanded = expandedId === sub.telegram_id;
+                  const isExpanded = sub.id in expandedEvents || loadingEvents.has(sub.id);
+                  const subEvents = expandedEvents[sub.id];
+                  const isLoadingEvents = loadingEvents.has(sub.id);
 
                   return (
                     <>
                       <tr
                         key={sub.id}
-                        onClick={() => toggleExpand(sub.telegram_id)}
+                        onClick={() => toggleExpand(sub.id)}
                         className={`hover:bg-gray-50 transition-colors cursor-pointer ${isExpanded ? 'bg-blue-50' : ''}`}
                       >
                         <td className="px-4 py-3 text-gray-400">
@@ -302,9 +283,9 @@ export function SubscriptionsPage() {
                             <div className="bg-gray-50 border-t border-b border-gray-200 px-8 py-4">
                               <h4 className="text-sm font-semibold text-gray-700 mb-3">Subscription History</h4>
 
-                              {eventsLoading ? (
+                              {isLoadingEvents ? (
                                 <p className="text-sm text-gray-400">Loading history...</p>
-                              ) : events.length === 0 ? (
+                              ) : !subEvents || subEvents.length === 0 ? (
                                 <p className="text-sm text-gray-400">No history yet</p>
                               ) : (
                                 <table className="w-full text-sm">
@@ -320,7 +301,7 @@ export function SubscriptionsPage() {
                                     </tr>
                                   </thead>
                                   <tbody className="divide-y divide-gray-200">
-                                    {events.map((ev) => (
+                                    {subEvents.map((ev) => (
                                       <tr key={ev.id} className="text-gray-600">
                                         <td className="py-2 pr-4">
                                           <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
@@ -361,35 +342,11 @@ export function SubscriptionsPage() {
             </table>
           </div>
 
-          {/* Pagination */}
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between mt-4">
-              <p className="text-sm text-gray-500">
-                Page {page} of {totalPages}
-              </p>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  disabled={page <= 1}
-                  className="px-3 py-1.5 text-sm font-medium text-gray-600 bg-gray-100 rounded-md
-                             hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed
-                             cursor-pointer transition-colors"
-                >
-                  Previous
-                </button>
-                <button
-                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                  disabled={page >= totalPages}
-                  className="px-3 py-1.5 text-sm font-medium text-gray-600 bg-gray-100 rounded-md
-                             hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed
-                             cursor-pointer transition-colors"
-                >
-                  Next
-                </button>
-              </div>
-            </div>
-          )}
         </>
+      )}
+
+      {subscriptions.length > 0 && (
+        <Pagination page={page} totalPages={totalPages} setPage={setPage} />
       )}
     </div>
   );

@@ -164,6 +164,16 @@ export async function migrate() {
     );
   `);
 
+  // ── broadcast_buttons: reusable inline buttons for broadcast messages ──
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS broadcast_buttons (
+      id              SERIAL PRIMARY KEY,
+      button_name     VARCHAR(255) NOT NULL,
+      link            TEXT NOT NULL,
+      created_at      TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
   // ── indexes ──
   await db.query(`CREATE INDEX IF NOT EXISTS idx_subscriptions_telegram_id ON subscriptions (telegram_id)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_transactions_telegram_id ON transactions (telegram_id)`);

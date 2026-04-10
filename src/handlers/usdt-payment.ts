@@ -2,13 +2,17 @@ import { Telegraf, type Context } from 'telegraf';
 import { TEXTS } from '../texts/index.js';
 import { getPricesForUser, type PricesSnapshot } from '../services/pricing.js';
 import { type PriceRow } from '../db/prices.js';
-import { createTransaction, updateTransactionStatus, updateTransactionTxHash, hasPendingCryptoTransaction } from '../db/transactions.js';
+import { createTransaction, updateTransactionStatus, updateTransactionTxHash, hasPendingCryptoTransaction, isFirstApprovedTransaction } from '../db/transactions.js';
+import { getUserByTelegramId } from '../db/users.js';
+import { hasActiveSubscription, getCancelledSubscription } from '../db/subscriptions.js';
+import { formatDate } from '../services/notifications.js';
+import { planDisplayName } from '../services/notifications.js';
 import { escapeHtml } from '../utils/html.js';
 import { logger } from '../utils/logger.js';
 import { createTtlMap } from '../utils/ttl-map.js';
 import { MAIN_MENU_KEYBOARD } from '../keyboards/index.js';
 import { generateOrderReference } from '../utils/order-reference.js';
-import { SUPPORT_URL } from '../config.js';
+import { SUPPORT_URL, USDT } from '../config.js';
 
 /** Map duration to crypto plan key */
 const DURATION_TO_CRYPTO_KEY: Record<string, string> = {
@@ -32,22 +36,6 @@ const pendingPayment = createTtlMap<HashFormState>(6 * 60 * 60 * 1000); // 6 hou
 /** Users who clicked "Я оплатив" and we're waiting for hash (15 min) */
 const waitingForHash = createTtlMap<HashFormState>(15 * 60 * 1000); // 15 minutes
 
-/** Get env vars */
-function getWalletAddress(): string {
-  return process.env.USDT_WALLET_ADDRESS ?? '';
-}
-
-function getAdminChannelId(): string {
-  return process.env.USDT_ADMIN_CHANNEL_ID ?? '';
-}
-
-function getHashInstructionUrl(): string {
-  return process.env.USDT_HASH_INSTRUCTION_URL ?? '';
-}
-
-function getTopUpInstructionUrl(): string {
-  return process.env.USDT_TOP_UP_INSTRUCTION_URL ?? '';
-}
 
 /** Handle crypto payment flow — called from subscription handler via callback */
 async function handleCryptoPayment(ctx: Context, duration: string): Promise<void> {
@@ -55,6 +43,36 @@ async function handleCryptoPayment(ctx: Context, duration: string): Promise<void
   if (!planKey || !ctx.from) return;
 
   const telegramId = ctx.from.id;
+
+  if (await hasActiveSubscription(telegramId)) {
+    await ctx.reply('\u{2705} У тебе вже є активна підписка!', {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '\u{1F4CB} Перевірити підписку', callback_data: 'sub:back' }],
+        ],
+      },
+    });
+    return;
+  }
+
+  const cancelledSub = await getCancelledSubscription(telegramId);
+  if (cancelledSub) {
+    const expiresDate = formatDate(new Date(cancelledSub.expires_at));
+    await ctx.reply(
+      `\u{26A0}\u{FE0F} Твоя підписка скасована\n\n` +
+      `\u{1F5D3}\u{FE0F} Доступ дійсний до: ${expiresDate}\n\n` +
+      `\u{1F4A1} Ти можеш відновити підписку зі збереженням поточної ціни до кінця оплаченого періоду.`,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '\u{2705} Відновити підписку', callback_data: 'sub:reactivate' }],
+          ],
+        },
+      },
+    );
+    return;
+  }
+
   const prices = await getPricesForUser(telegramId);
   const plan = prices[planKey];
   if (!plan) return;
@@ -65,11 +83,8 @@ async function handleCryptoPayment(ctx: Context, duration: string): Promise<void
     return;
   }
 
-  // Delete the previous message (tariff/payment method selection)
-  await ctx.deleteMessage().catch(() => {});
-
   const orderReference = generateOrderReference(telegramId, 'crypto');
-  const walletAddress = getWalletAddress();
+  const walletAddress = USDT.walletAddress;
 
   if (!walletAddress) {
     logger.error('USDT_WALLET_ADDRESS not configured');
@@ -107,8 +122,8 @@ async function handleCryptoPayment(ctx: Context, duration: string): Promise<void
         parse_mode: 'HTML',
         reply_markup: {
           inline_keyboard: [
-            [{ text: 'Інструкція як дивитись хеш транзакції 🔗', url: getHashInstructionUrl() }],
-            [{ text: 'Інструкція як поповняти крипту 🔗', url: getTopUpInstructionUrl() }],
+            [{ text: 'Інструкція як дивитись хеш транзакції 🔗', url: USDT.hashInstructionUrl }],
+            [{ text: 'Інструкція як поповняти крипту 🔗', url: USDT.topUpInstructionUrl }],
             [{ text: 'Є питання ❓', url: SUPPORT_URL }],
           ],
         },
@@ -136,6 +151,7 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
   // Crypto payment selected from inline flow (pay:usdt:12m, pay:usdt:6m, pay:usdt:1m)
   bot.action(/^pay:usdt:(\w+)$/, async (ctx) => {
     await ctx.answerCbQuery();
+    await ctx.deleteMessage().catch(() => {});
     const duration = ctx.match[1];
     await handleCryptoPayment(ctx, duration);
   });
@@ -146,6 +162,10 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
     const state = pendingPayment.get(telegramId);
 
     if (!state) {
+      if (await hasPendingCryptoTransaction(telegramId)) {
+        await ctx.reply('Твій USDT платіж вже на перевірці. Очікуй відповіді.');
+        return;
+      }
       await ctx.reply('У тебе немає активного USDT платежу. Обери тариф спочатку.');
       return;
     }
@@ -199,7 +219,7 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
     // Clear waiting state
     waitingForHash.delete(telegramId);
 
-    const adminChannelId = getAdminChannelId();
+    const adminChannelId = USDT.adminChannelId;
 
     if (!adminChannelId) {
       logger.error('USDT_ADMIN_CHANNEL_ID not configured');
@@ -208,7 +228,7 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
     }
 
     // Create transaction and save hash
-    await createTransaction({
+    const tx = await createTransaction({
       telegramId,
       amount: state.plan.amount,
       currency: state.plan.currency,
@@ -229,18 +249,22 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
 
     // Send to admin channel for manual verification
     try {
+      const user = await getUserByTelegramId(telegramId);
       const username = ctx.from.username ? `@${escapeHtml(ctx.from.username)}` : 'немає';
-      const threadId = Number(process.env.USDT_ADMIN_THREAD_ID ?? 0) || undefined;
+      const isFirst = await isFirstApprovedTransaction(telegramId, state.orderReference);
+      const tag = isFirst ? '#first_subscription' : '#renew';
+      const threadId = Number(USDT.adminThreadId) || undefined;
       await bot.telegram.sendMessage(
         adminChannelId,
-        `<b>MED usdt — перевірка</b>\n` +
+        `<b>ME USDT - перевірка</b>\n` +
         `Оплата в USDT потребує підтвердження 👇\n\n` +
-        `▸ uid: <code>${telegramId}</code>\n` +
-        `▸ username: ${username}\n` +
-        `▸ Сума оплати: ${state.plan.amount} USDT\n` +
-        `▸ План: ${escapeHtml(state.plan.display_name)}\n` +
-        `▸ Хеш: <code>${escapeHtml(hash)}</code>\n` +
-        `▸ Замовлення: <code>${escapeHtml(state.orderReference)}</code>`,
+        `▸ User ID: <code>${user?.id ?? 'N/A'}</code>\n` +
+        `▸ Username: ${username}\n` +
+        `▸ Transaction ID: <code>${tx.id}</code>\n` +
+        `▸ Plan: ${planDisplayName(state.planKey)}\n` +
+        `▸ Amount: ${state.plan.amount} ${escapeHtml(state.plan.currency)}\n` +
+        `▸ Hash: <code>${escapeHtml(hash)}</code>\n\n` +
+        tag,
         {
           parse_mode: 'HTML',
           message_thread_id: threadId,

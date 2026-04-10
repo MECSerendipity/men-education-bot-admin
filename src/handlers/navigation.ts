@@ -15,4 +15,11 @@ export function registerNavigationHandlers(bot: Telegraf) {
       reply_markup: MAIN_MENU_KEYBOARD,
     });
   });
+
+  // Fallback — catch any unhandled message (groups already filtered by middleware)
+  bot.on('message', async (ctx) => {
+    await ctx.reply('\u{1F9E0} Мій мозок це не обробляє. Скористайся меню \u{1F447}', {
+      reply_markup: MAIN_MENU_KEYBOARD,
+    });
+  });
 }

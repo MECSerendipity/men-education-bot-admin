@@ -2,6 +2,7 @@ import { Telegraf } from 'telegraf';
 import { runCardChargeJob, runCryptoReminderJob } from './charge.js';
 import { runExpireJob } from './expire.js';
 import { logger } from '../utils/logger.js';
+import { runCleanupJob } from './cleanup.js';
 
 /** Job schedule definition */
 interface ScheduledJob {
@@ -15,6 +16,7 @@ const JOBS: ScheduledJob[] = [
   { name: 'expire',   utcHour: 7,  run: runExpireJob },
   { name: 'charge-1', utcHour: 9,  run: async (bot) => { await runCardChargeJob(bot); await runCryptoReminderJob(bot); } },
   { name: 'charge-2', utcHour: 15, run: async (bot) => { await runCardChargeJob(bot); await runCryptoReminderJob(bot); } },
+  { name: 'cleanup',  utcHour: 3,  run: async () => { await runCleanupJob(); } },
 ];
 
 /** Track which jobs already ran today (reset at midnight UTC) */

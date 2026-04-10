@@ -1,4 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
+import { SearchIcon } from '../components/Icons';
+import { Pagination } from '../components/Pagination';
+import { useAuth } from '../hooks/useAuth';
+
+const PAGE_SIZE = 10;
 
 interface TextEntry {
   key: string;
@@ -7,17 +12,6 @@ interface TextEntry {
 
 /** Max characters before text gets collapsed */
 const MAX_PREVIEW_LENGTH = 150;
-
-/** Search icon */
-function SearchIcon() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
-         stroke="currentColor" strokeWidth={1.5} className="w-5 h-5">
-      <path strokeLinecap="round" strokeLinejoin="round"
-            d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
-    </svg>
-  );
-}
 
 /** Refresh icon */
 function RefreshIcon() {
@@ -181,20 +175,21 @@ function TextCard({
 export function TextsPage() {
   const [texts, setTexts] = useState<TextEntry[]>([]);
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [applying, setApplying] = useState(false);
   const [hasUnsaved, setHasUnsaved] = useState(false);
+  const { headers } = useAuth();
 
   /** Fetch all texts from the API */
   const fetchTexts = useCallback(async () => {
     setLoading(true);
     setError('');
-    const token = localStorage.getItem('admin_token');
 
     try {
       const res = await fetch('/api/texts', {
-        headers: { Authorization: `Bearer ${token}` },
+        headers,
       });
       if (!res.ok) throw new Error('Failed to load texts');
       const data: TextEntry[] = await res.json();
@@ -212,12 +207,11 @@ export function TextsPage() {
 
   /** Save a single text entry via PUT */
   async function handleSave(key: string, value: string) {
-    const token = localStorage.getItem('admin_token');
     const res = await fetch(`/api/texts/${encodeURIComponent(key)}`, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
+        ...headers,
       },
       body: JSON.stringify({ value }),
     });
@@ -237,11 +231,10 @@ export function TextsPage() {
   /** Apply text changes to the running bot */
   async function handleApply() {
     setApplying(true);
-    const token = localStorage.getItem('admin_token');
     try {
       const res = await fetch('/api/texts/apply', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
+        headers,
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -255,6 +248,9 @@ export function TextsPage() {
     }
   }
 
+  // Reset page when search changes
+  useEffect(() => { setPage(1); }, [search]);
+
   /** Filter texts -- contains match on key or value */
   const filtered = texts.filter((entry) => {
     if (!search.trim()) return true;
@@ -265,6 +261,9 @@ export function TextsPage() {
     );
   });
 
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
   if (loading) {
     return <p className="text-gray-500">Loading...</p>;
   }
@@ -274,8 +273,8 @@ export function TextsPage() {
   }
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
+    <div className="flex flex-col h-full">
+      <div className="flex items-center justify-between mb-3">
         <h2 className="text-2xl font-bold text-gray-900">Texts</h2>
         <div className="flex items-center gap-3">
           <button
@@ -305,7 +304,7 @@ export function TextsPage() {
       </div>
 
       {/* Search field */}
-      <div className="relative mb-6">
+      <div className="relative mb-3">
         <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
           <SearchIcon />
         </div>
@@ -322,7 +321,7 @@ export function TextsPage() {
 
       {/* Results or empty state */}
       {filtered.length === 0 ? (
-        <div className="text-center py-16">
+        <div className="text-center py-16 flex-1">
           <div className="text-gray-300 mb-3">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
                  stroke="currentColor" strokeWidth={1.5} className="w-12 h-12 mx-auto">
@@ -336,11 +335,15 @@ export function TextsPage() {
           </p>
         </div>
       ) : (
-        <div className="space-y-3">
-          {filtered.map((entry) => (
+        <div className="overflow-auto flex-1 min-h-0 space-y-3">
+          {paginated.map((entry) => (
             <TextCard key={entry.key} entry={entry} search={search} onSave={handleSave} />
           ))}
         </div>
+      )}
+
+      {filtered.length > 0 && (
+        <Pagination page={page} totalPages={totalPages} setPage={setPage} />
       )}
     </div>
   );

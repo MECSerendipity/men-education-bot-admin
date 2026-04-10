@@ -47,7 +47,7 @@ export function DashboardPage({ onLogout }: DashboardPageProps) {
   const [currentPage, setCurrentPage] = useState<Page>('dashboard');
 
   return (
-    <div className="flex min-h-screen bg-gray-50">
+    <div className="flex h-screen bg-gray-50">
       {/* Sidebar */}
       <Sidebar currentPage={currentPage} onNavigate={setCurrentPage} />
 
@@ -55,7 +55,7 @@ export function DashboardPage({ onLogout }: DashboardPageProps) {
       <div className="flex-1 flex flex-col">
         {/* Header */}
         <header className="bg-white shadow-sm border-b border-gray-200">
-          <div className="px-6 py-4 flex justify-end">
+          <div className="px-6 py-2 flex justify-end">
             <button
               onClick={onLogout}
               className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900
@@ -67,7 +67,7 @@ export function DashboardPage({ onLogout }: DashboardPageProps) {
         </header>
 
         {/* Page content */}
-        <main className="flex-1 px-6 py-8">
+        <main className="flex-1 flex flex-col overflow-hidden px-6 py-4">
           <PageContent page={currentPage} />
         </main>
       </div>

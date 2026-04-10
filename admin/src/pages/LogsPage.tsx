@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useAuth } from '../hooks/useAuth';
 
 type LogTab = 'activity' | 'system';
 
@@ -38,14 +39,14 @@ function ActivityLogs() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const { headers } = useAuth();
 
   const fetchLogs = useCallback(async () => {
     setLoading(true);
-    const token = localStorage.getItem('admin_token');
     try {
       const params = new URLSearchParams({ page: String(page), limit: '50', search, filter });
       const res = await fetch(`/api/logs/activity?${params}`, {
-        headers: { Authorization: `Bearer ${token}` },
+        headers,
       });
       const data = await res.json();
       setLogs(data.logs ?? []);
@@ -152,14 +153,14 @@ function SystemLogs() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const { headers } = useAuth();
 
   const fetchLogs = useCallback(async () => {
     setLoading(true);
-    const token = localStorage.getItem('admin_token');
     try {
       const params = new URLSearchParams({ page: String(page), limit: '50', search, filter });
       const res = await fetch(`/api/logs/system?${params}`, {
-        headers: { Authorization: `Bearer ${token}` },
+        headers,
       });
       const data = await res.json();
       setLogs(data.logs ?? []);

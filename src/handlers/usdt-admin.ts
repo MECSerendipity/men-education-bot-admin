@@ -1,11 +1,14 @@
 import { Telegraf, type Context } from 'telegraf';
-import { getTransactionByOrderReference, claimTransaction } from '../db/transactions.js';
+import { getTransactionByOrderReference, claimTransaction, isFirstApprovedTransaction } from '../db/transactions.js';
 import { activateSubscription } from '../db/subscriptions.js';
 import { getPricesForUser, daysFromPlanKey } from '../services/pricing.js';
 import { deleteOffersForUser } from '../db/prices.js';
 import { logger } from '../utils/logger.js';
 import { SUPPORT_URL } from '../config.js';
 import { sendRulesOrInvite } from './rules.js';
+import { getUserByTelegramId } from '../db/users.js';
+import { planDisplayName, buildPaymentSuccessMessage } from '../services/notifications.js';
+import { escapeHtml } from '../utils/html.js';
 
 /** Register admin approval/denial handlers for USDT payments */
 export function registerUsdtAdminHandler(bot: Telegraf) {
@@ -42,14 +45,16 @@ async function handleAdminDecision(
   await ctx.answerCbQuery();
 
   const adminUsername = ctx.from?.username ? `@${ctx.from.username}` : 'Admin';
-  const originalText = ctx.callbackQuery && 'message' in ctx.callbackQuery
-    ? (ctx.callbackQuery.message as { text?: string })?.text ?? ''
-    : '';
+  const user = await getUserByTelegramId(payment.telegram_id);
+  const username = user?.username ? `@${escapeHtml(user.username)}` : 'немає';
+  const isFirst = await isFirstApprovedTransaction(payment.telegram_id, orderReference);
+  const tag = isFirst ? '#first_subscription' : '#renew';
+  const hashDisplay = payment.tx_hash ? `<code>${escapeHtml(payment.tx_hash)}</code>` : 'N/A';
 
   if (approved) {
     const days = daysFromPlanKey(payment.plan);
     const prices = await getPricesForUser(payment.telegram_id);
-    await activateSubscription({
+    const subscription = await activateSubscription({
       telegramId: payment.telegram_id,
       plan: payment.plan,
       method: 'crypto',
@@ -60,13 +65,13 @@ async function handleAdminDecision(
     await deleteOffersForUser(payment.telegram_id);
 
     try {
-      await bot.telegram.sendMessage(
-        payment.telegram_id,
-        'Твоя оплата підтверджена\n' +
-        'Статус: Підтверджено ✅\n\n' +
-        `📦 ${payment.amount} USDT\n\n` +
-        'Дякуємо! Підписка активована 🎉',
-      );
+      const successText = buildPaymentSuccessMessage({
+        plan: payment.plan,
+        amount: payment.amount,
+        currency: payment.currency,
+        expiresAt: subscription.expires_at,
+      });
+      await bot.telegram.sendMessage(payment.telegram_id, successText);
     } catch (err) {
       logger.error('Failed to send USDT approval to user', err);
     }
@@ -75,7 +80,16 @@ async function handleAdminDecision(
 
     try {
       await ctx.editMessageText(
-        originalText + `\n\n✅ Підтверджено — ${adminUsername}`,
+        `<b>ME USDT - оплата:</b>\n\n` +
+        `▸ User ID: <code>${user?.id ?? 'N/A'}</code>\n` +
+        `▸ Username: ${username}\n` +
+        `▸ Subscription ID: <code>${subscription.id}</code>\n` +
+        `▸ Transaction ID: <code>${payment.id}</code>\n` +
+        `▸ Plan: ${planDisplayName(payment.plan)}\n` +
+        `▸ Amount: ${payment.amount} ${escapeHtml(payment.currency)}\n` +
+        `▸ Hash: ${hashDisplay}\n` +
+        `▸ Status: \u{2705} Approved by ${adminUsername}\n\n` +
+        tag,
         { parse_mode: 'HTML' },
       );
     } catch { /* ignore edit errors */ }
@@ -99,7 +113,15 @@ async function handleAdminDecision(
 
     try {
       await ctx.editMessageText(
-        originalText + `\n\n❌ Не підтверджено — ${adminUsername}`,
+        `<b>ME USDT - оплата:</b>\n\n` +
+        `▸ User ID: <code>${user?.id ?? 'N/A'}</code>\n` +
+        `▸ Username: ${username}\n` +
+        `▸ Transaction ID: <code>${payment.id}</code>\n` +
+        `▸ Plan: ${planDisplayName(payment.plan)}\n` +
+        `▸ Amount: ${payment.amount} ${escapeHtml(payment.currency)}\n` +
+        `▸ Hash: ${hashDisplay}\n` +
+        `▸ Status: \u{274C} Rejected by ${adminUsername}\n\n` +
+        tag,
         { parse_mode: 'HTML' },
       );
     } catch { /* ignore edit errors */ }

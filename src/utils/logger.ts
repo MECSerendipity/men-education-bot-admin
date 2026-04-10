@@ -5,8 +5,8 @@ function writeToDb(level: string, message: string, context?: Record<string, unkn
   db.query(
     'INSERT INTO system_logs (level, message, context) VALUES ($1, $2, $3)',
     [level, message, context ? JSON.stringify(context) : null],
-  ).catch(() => {
-    // Silently ignore DB write failures to prevent infinite error loops
+  ).catch((err) => {
+    process.stderr.write(`[DB_LOG_FAILED] ${level}: ${message} — ${err}\n`);
   });
 }
 

@@ -3,9 +3,12 @@ import { buildTariffKeyboard, paymentMethodKeyboard } from '../keyboards/index.j
 import { TEXTS } from '../texts/index.js';
 import { getPricesForUser } from '../services/pricing.js';
 import { createTransaction, hasPendingCardTransaction, updateTransactionStatus } from '../db/transactions.js';
+import { hasActiveSubscription, getCancelledSubscription } from '../db/subscriptions.js';
+import { formatDate, planDisplayName } from '../services/notifications.js';
 import { createInvoice, removeInvoice } from '../services/wayforpay.js';
 import { logger } from '../utils/logger.js';
 import { generateOrderReference } from '../utils/order-reference.js';
+import { savePaymentMessage, deletePaymentMessage } from '../utils/payment-messages.js';
 
 /** Map duration code to plan keys and detail text key */
 const DURATION_MAP: Record<string, { card: string; crypto: string; detailKey: keyof typeof TEXTS }> = {
@@ -31,8 +34,37 @@ async function handleCardPayment(ctx: Context, duration: string): Promise<void> 
 
   const telegramId = ctx.from.id;
 
+  if (await hasActiveSubscription(telegramId)) {
+    await ctx.reply('\u{2705} У тебе вже є активна підписка!', {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '\u{1F4CB} Перевірити підписку', callback_data: 'sub:back' }],
+        ],
+      },
+    });
+    return;
+  }
+
+  const cancelledSub = await getCancelledSubscription(telegramId);
+  if (cancelledSub) {
+    const expiresDate = formatDate(new Date(cancelledSub.expires_at));
+    await ctx.reply(
+      `\u{26A0}\u{FE0F} Твоя підписка скасована\n\n` +
+      `\u{1F5D3}\u{FE0F} Доступ дійсний до: ${expiresDate}\n\n` +
+      `\u{1F4A1} Ти можеш відновити підписку зі збереженням поточної ціни до кінця оплаченого періоду.`,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '\u{2705} Відновити підписку', callback_data: 'sub:reactivate' }],
+          ],
+        },
+      },
+    );
+    return;
+  }
+
   if (await hasPendingCardTransaction(telegramId)) {
-    await ctx.reply('У тебе вже є активний платіж. Скористайся попереднім посиланням або зачекай 15 хвилин.');
+    await ctx.reply('У тебе вже є активний платіж. Скористайся попереднім посиланням або зачекай 10 хвилин.');
     return;
   }
 
@@ -66,23 +98,26 @@ async function handleCardPayment(ctx: Context, duration: string): Promise<void> 
       return;
     }
 
-    await ctx.reply(
-      `Номер замовлення\n${orderReference}`,
-    );
-
-    await ctx.reply(
-      `💳 ${plan.display_name}\n💰 Сума: ${plan.amount} ${plan.currency}`,
+    const paymentMsg = await ctx.reply(
+      `\u{1F4B3} Оплата підписки\n\n` +
+      `▸ План: ${plan.display_name}\n` +
+      `▸ Сума: ${plan.amount} ${plan.currency}\n\n` +
+      `\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n` +
+      `\u{23F3} Посилання дійсне 10 хвилин`,
       {
+        parse_mode: 'HTML',
         reply_markup: {
           inline_keyboard: [
             [
-              { text: '💳 Оплатити', url: result.invoiceUrl },
-              { text: 'Відміна', callback_data: `cancel_invoice:${orderReference}` },
+              { text: '\u{1F4B3} Оплатити', url: result.invoiceUrl },
+              { text: '\u{274C} Відміна', callback_data: `cancel_invoice:${orderReference}` },
             ],
           ],
         },
       },
     );
+
+    savePaymentMessage(orderReference, paymentMsg.chat.id, paymentMsg.message_id);
   } catch (err) {
     logger.error('Failed to create payment', err);
     await ctx.reply('⚠️ Помилка створення платежу. Спробуй ще раз.');
@@ -147,8 +182,18 @@ export function registerSubscriptionHandler(bot: Telegraf) {
 
     await removeInvoice(orderReference);
     await updateTransactionStatus(orderReference, 'Cancelled');
+    deletePaymentMessage(orderReference);
 
-    await ctx.editMessageText('Платіж скасовано');
+    await ctx.editMessageText(
+      '\u{274C} Платіж скасовано\n\nХочеш обрати інший тариф?',
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '\u{1F504} Обрати тариф', callback_data: 'subscription' }],
+          ],
+        },
+      },
+    );
   });
 
   // Back to tariffs

@@ -8,6 +8,9 @@ import { getPricesForUser, daysFromPlanKey } from '../services/pricing.js';
 import { deleteOffersForUser } from '../db/prices.js';
 import { sendRulesOrInvite } from '../handlers/rules.js';
 import { reloadTexts } from '../texts/index.js';
+import { sendPaymentNotification, buildPaymentSuccessMessage } from '../services/notifications.js';
+import { getUserByTelegramId } from '../db/users.js';
+import { getPaymentMessage, deletePaymentMessage } from '../utils/payment-messages.js';
 
 const MAX_BODY_SIZE = 64 * 1024; // 64 KB — more than enough for WayForPay callbacks
 
@@ -176,7 +179,7 @@ async function handleCallback(req: IncomingMessage, res: ServerResponse, bot: Te
 
       // Get prices and activate subscription with snapshot
       const prices = await getPricesForUser(payment.telegram_id);
-      await activateSubscription({
+      const subscription = await activateSubscription({
         telegramId: payment.telegram_id,
         plan: payment.plan,
         method: 'card',
@@ -190,23 +193,43 @@ async function handleCallback(req: IncomingMessage, res: ServerResponse, bot: Te
       // Delete price offers after successful payment
       await deleteOffersForUser(payment.telegram_id);
 
-      // Notify user in Telegram
+      // Notify user in Telegram — edit original payment message or send new one
+      const successText = buildPaymentSuccessMessage({
+        plan: payment.plan,
+        amount: payment.amount,
+        currency: payment.currency,
+        expiresAt: subscription.expires_at,
+      });
+
       try {
-        const displayName = prices[payment.plan]?.display_name ?? payment.plan;
-        await bot.telegram.sendMessage(
-          payment.telegram_id,
-          `✅ Оплата пройшла успішно!\n\n` +
-          `📦 ${displayName}\n` +
-          `💰 ${payment.amount} ${payment.currency}\n` +
-          `💳 ${cardPan ?? 'Картка'}\n\n` +
-          `Дякуємо! Підписка активована 🎉`,
-        );
+        const savedMsg = getPaymentMessage(orderReference);
+        if (savedMsg) {
+          await bot.telegram.editMessageText(savedMsg.chatId, savedMsg.messageId, undefined, successText);
+          deletePaymentMessage(orderReference);
+        } else {
+          await bot.telegram.sendMessage(payment.telegram_id, successText);
+        }
       } catch (err) {
         logger.error('Failed to send payment success message', err);
       }
 
       // Send rules or invite link
       await sendRulesOrInvite(bot, payment.telegram_id);
+
+      // Send card payment notification to admin channel
+      const user = await getUserByTelegramId(payment.telegram_id);
+      await sendPaymentNotification(bot, {
+        subscriptionId: subscription.id,
+        transactionId: payment.id,
+        userId: user?.id ?? 0,
+        telegramId: payment.telegram_id,
+        username: user?.username ?? null,
+        plan: payment.plan,
+        amount: payment.amount,
+        currency: payment.currency,
+        orderReference,
+        method: 'card',
+      });
     } else if (transactionStatus === 'Declined') {
       await updateTransactionDeclineReason(orderReference, String(data.reason ?? ''), String(data.reasonCode ?? ''));
       // Don't notify user if transaction was already cancelled (e.g. invoice removed)

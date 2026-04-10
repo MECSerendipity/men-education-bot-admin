@@ -43,6 +43,83 @@ export async function getActiveSubscription(telegramId: number): Promise<Subscri
   return result.rows[0] ?? null;
 }
 
+/** Get cancelled subscription that hasn't expired yet */
+export async function getCancelledSubscription(telegramId: number): Promise<Subscription | null> {
+  const result = await db.query(
+    `SELECT * FROM subscriptions
+     WHERE telegram_id = $1
+       AND status = 'Cancelled'
+       AND expires_at > NOW()
+     LIMIT 1`,
+    [telegramId],
+  );
+  return result.rows[0] ?? null;
+}
+
+/** Cancel active subscription — status becomes Cancelled, access until expires_at */
+export async function cancelSubscription(telegramId: number): Promise<Subscription | null> {
+  const client = await db.pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const result = await client.query(
+      `UPDATE subscriptions SET status = 'Cancelled', updated_at = NOW()
+       WHERE telegram_id = $1 AND status = 'Active' AND expires_at > NOW()
+       RETURNING *`,
+      [telegramId],
+    );
+    const sub: Subscription | undefined = result.rows[0];
+    if (!sub) { await client.query('ROLLBACK'); return null; }
+
+    // Log cancelled event
+    await client.query(
+      `INSERT INTO subscription_events (subscription_id, telegram_id, event, plan, method, expires_at)
+       VALUES ($1, $2, 'cancelled', $3, $4, $5)`,
+      [sub.id, telegramId, sub.plan, sub.method, sub.expires_at],
+    );
+
+    await client.query('COMMIT');
+    return sub;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/** Reactivate cancelled subscription — status back to Active */
+export async function reactivateSubscription(telegramId: number): Promise<Subscription | null> {
+  const client = await db.pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const result = await client.query(
+      `UPDATE subscriptions SET status = 'Active', updated_at = NOW()
+       WHERE telegram_id = $1 AND status = 'Cancelled' AND expires_at > NOW()
+       RETURNING *`,
+      [telegramId],
+    );
+    const sub: Subscription | undefined = result.rows[0];
+    if (!sub) { await client.query('ROLLBACK'); return null; }
+
+    // Log reactivated event
+    await client.query(
+      `INSERT INTO subscription_events (subscription_id, telegram_id, event, plan, method, expires_at)
+       VALUES ($1, $2, 'reactivated', $3, $4, $5)`,
+      [sub.id, telegramId, sub.plan, sub.method, sub.expires_at],
+    );
+
+    await client.query('COMMIT');
+    return sub;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 /**
  * Activate subscription after successful payment.
  * One subscription per user: if active — extend expires_at, otherwise create new.

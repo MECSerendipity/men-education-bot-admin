@@ -1,4 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
+import { formatDate } from '../utils/format';
+import { SearchIcon } from '../components/Icons';
+import { Pagination } from '../components/Pagination';
+import { InfoTooltip } from '../components/Tooltip';
+import { useAuth } from '../hooks/useAuth';
+
+const FILTER_TOOLTIPS: Record<string, string> = {
+  active: 'Юзери з активною підпискою. Мають доступ до приватних каналів клубу.',
+  inactive: 'Юзери без підписки або з простроченою/скасованою підпискою. Не мають доступу до каналів.',
+};
 
 interface User {
   id: number;
@@ -24,29 +34,6 @@ interface UsersResponse {
 
 type Filter = 'all' | 'active' | 'inactive';
 
-function SearchIcon() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
-         stroke="currentColor" strokeWidth={1.5} className="w-5 h-5">
-      <path strokeLinecap="round" strokeLinejoin="round"
-            d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
-    </svg>
-  );
-}
-
-function formatDate(dateStr: string | null): string {
-  if (!dateStr) return '—';
-  return new Date(dateStr).toLocaleDateString('uk-UA', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-  });
-}
-
-function isSubscriptionActive(user: User): boolean {
-  return user.is_subscribed;
-}
-
 export function UsersPage() {
   const [users, setUsers] = useState<User[]>([]);
   const [total, setTotal] = useState(0);
@@ -57,16 +44,16 @@ export function UsersPage() {
   const [counts, setCounts] = useState<{ all: number; active: number; inactive: number }>({ all: 0, active: 0, inactive: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const { headers } = useAuth();
 
   const fetchUsers = useCallback(async () => {
     setLoading(true);
     setError('');
-    const token = localStorage.getItem('admin_token');
 
     try {
       const params = new URLSearchParams({
         page: String(page),
-        limit: '20',
+        limit: '10',
         filter,
       });
       if (search.trim()) {
@@ -74,7 +61,7 @@ export function UsersPage() {
       }
 
       const res = await fetch(`/api/users?${params}`, {
-        headers: { Authorization: `Bearer ${token}` },
+        headers,
       });
       if (!res.ok) throw new Error('Failed to load users');
 
@@ -106,14 +93,14 @@ export function UsersPage() {
   ];
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
+    <div className="flex flex-col h-full">
+      <div className="flex items-center justify-between mb-3">
         <h2 className="text-2xl font-bold text-gray-900">Users</h2>
         <span className="text-sm text-gray-500">{total} users total</span>
       </div>
 
       {/* Search */}
-      <div className="relative mb-4">
+      <div className="relative mb-2">
         <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
           <SearchIcon />
         </div>
@@ -129,26 +116,29 @@ export function UsersPage() {
       </div>
 
       {/* Filter buttons */}
-      <div className="flex gap-2 mb-6">
+      <div className="flex gap-2 mb-3 flex-wrap items-center">
         {filterButtons.map((btn) => (
-          <button
-            key={btn.key}
-            onClick={() => setFilter(btn.key)}
-            className={`px-4 py-1.5 text-sm font-medium rounded-md cursor-pointer transition-colors ${
-              filter === btn.key
-                ? 'bg-blue-600 text-white'
-                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-            }`}
-          >
-            {btn.label}
-          </button>
+          <div key={btn.key} className="relative">
+            <button
+              onClick={() => setFilter(btn.key)}
+              className={`px-4 py-1.5 text-sm font-medium rounded-md cursor-pointer transition-colors inline-flex items-center gap-1.5 ${
+                filter === btn.key
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              {btn.key !== 'all' && FILTER_TOOLTIPS[btn.key] && (
+                <InfoTooltip content={FILTER_TOOLTIPS[btn.key]} />
+              )}
+              {btn.label}
+            </button>
+          </div>
         ))}
       </div>
 
       {/* Error */}
-      {error && <p className="text-red-600 mb-4">{error}</p>}
+      {error && <p className="text-red-600 mb-2">{error}</p>}
 
-      {/* Loading */}
       {loading ? (
         <p className="text-gray-500">Loading...</p>
       ) : users.length === 0 ? (
@@ -169,8 +159,7 @@ export function UsersPage() {
         </div>
       ) : (
         <>
-          {/* Table */}
-          <div className="overflow-x-auto border border-gray-200 rounded-lg">
+          <div className="overflow-auto border border-gray-200 rounded-lg flex-1 min-h-0">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-gray-600 text-left">
                 <tr>
@@ -186,7 +175,7 @@ export function UsersPage() {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {users.map((user) => {
-                  const active = isSubscriptionActive(user);
+                  const active = user.is_subscribed;
                   return (
                     <tr key={user.id} className="hover:bg-gray-50 transition-colors">
                       <td className="px-4 py-3 font-mono text-gray-400">{user.id}</td>
@@ -216,35 +205,11 @@ export function UsersPage() {
             </table>
           </div>
 
-          {/* Pagination */}
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between mt-4">
-              <p className="text-sm text-gray-500">
-                Page {page} of {totalPages}
-              </p>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  disabled={page <= 1}
-                  className="px-3 py-1.5 text-sm font-medium text-gray-600 bg-gray-100 rounded-md
-                             hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed
-                             cursor-pointer transition-colors"
-                >
-                  Previous
-                </button>
-                <button
-                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                  disabled={page >= totalPages}
-                  className="px-3 py-1.5 text-sm font-medium text-gray-600 bg-gray-100 rounded-md
-                             hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed
-                             cursor-pointer transition-colors"
-                >
-                  Next
-                </button>
-              </div>
-            </div>
-          )}
         </>
+      )}
+
+      {users.length > 0 && (
+        <Pagination page={page} totalPages={totalPages} setPage={setPage} />
       )}
     </div>
   );

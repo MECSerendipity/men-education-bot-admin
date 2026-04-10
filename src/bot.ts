@@ -19,6 +19,14 @@ export function createBot(token: string): Telegraf {
   // Global error handler — must be registered first
   registerErrorHandler(bot);
 
+  // Ignore non-private chats (groups, channels) — except join requests and callback queries (admin buttons)
+  bot.use(async (ctx, next) => {
+    if (ctx.chatJoinRequest) return next();
+    if (ctx.callbackQuery) return next();
+    if (ctx.chat && ctx.chat.type !== 'private') return;
+    return next();
+  });
+
   // Activity logger — logs all user interactions
   registerActivityLogger(bot);
 

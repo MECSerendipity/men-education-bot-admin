@@ -1,4 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
+import { formatDateTime } from '../utils/format';
+import { SearchIcon } from '../components/Icons';
+import { Pagination } from '../components/Pagination';
+import { InfoTooltip } from '../components/Tooltip';
+import { STATUS_STYLES, METHOD_STYLES } from '../utils/styles';
+import { useAuth } from '../hooks/useAuth';
 
 interface Transaction {
   id: number;
@@ -29,49 +35,24 @@ interface TransactionsResponse {
     Pending: number;
     Declined: number;
     WaitingConfirmation: number;
+    Cancelled: number;
     other: number;
   };
 }
 
-type Filter = 'all' | 'Approved' | 'Pending' | 'Declined' | 'WaitingConfirmation';
-
-function SearchIcon() {
-  return (
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
-         stroke="currentColor" strokeWidth={1.5} className="w-5 h-5">
-      <path strokeLinecap="round" strokeLinejoin="round"
-            d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
-    </svg>
-  );
-}
-
-function formatDateTime(dateStr: string | null): string {
-  if (!dateStr) return '—';
-  return new Date(dateStr).toLocaleString('uk-UA', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-const STATUS_STYLES: Record<string, string> = {
-  Approved: 'bg-green-100 text-green-700',
-  Pending: 'bg-yellow-100 text-yellow-700',
-  Declined: 'bg-red-100 text-red-600',
-  WaitingConfirmation: 'bg-blue-100 text-blue-700',
-  Expired: 'bg-gray-100 text-gray-500',
-  Cancelled: 'bg-gray-100 text-gray-500',
-};
+type Filter = 'all' | 'Approved' | 'Pending' | 'Declined' | 'WaitingConfirmation' | 'Cancelled';
 
 const STATUS_LABELS: Record<string, string> = {
   WaitingConfirmation: 'Waiting',
 };
 
-const METHOD_STYLES: Record<string, string> = {
-  card: 'bg-purple-100 text-purple-700',
-  crypto: 'bg-orange-100 text-orange-700',
+const STATUS_TOOLTIPS: Record<string, string> = {
+  Approved: 'Оплата успішно завершена. Гроші списано з картки або USDT підтверджено адміном. Підписка активована.',
+  Pending: 'Invoice створено в WayForPay, юзер ще не оплатив. Автоматично скасовується через 1 годину якщо не оплачено.',
+  Declined: 'Платіж відхилено. Для картки - банк або WayForPay відмовив (недостатньо коштів, ліміт, тощо). Для USDT - адмін натиснув "Не підтверджено".',
+  WaitingConfirmation: 'Юзер обрав оплату USDT, відправив хеш транзакції і чекає на підтвердження адміном. Перевірте хеш і натисніть Approve/Deny.',
+  Cancelled: 'Юзер сам скасував платіж натиснувши кнопку "Відміна" до оплати. Invoice видалено з WayForPay.',
+  WaitingAuthComplete: 'Банк вимагає 3D Secure верифікацію. Юзер перенаправлений на сторінку банку. Після верифікації статус зміниться на Approved або Declined.',
 };
 
 export function TransactionsPage() {
@@ -82,22 +63,22 @@ export function TransactionsPage() {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [counts, setCounts] = useState<TransactionsResponse['counts']>({
-    all: 0, Approved: 0, Pending: 0, Declined: 0, WaitingConfirmation: 0, other: 0,
+    all: 0, Approved: 0, Pending: 0, Declined: 0, WaitingConfirmation: 0, Cancelled: 0, other: 0,
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const { headers } = useAuth();
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     setError('');
-    const token = localStorage.getItem('admin_token');
 
     try {
-      const params = new URLSearchParams({ page: String(page), limit: '20', filter });
+      const params = new URLSearchParams({ page: String(page), limit: '10', filter });
       if (search.trim()) params.set('search', search.trim());
 
       const res = await fetch(`/api/transactions?${params}`, {
-        headers: { Authorization: `Bearer ${token}` },
+        headers,
       });
       if (!res.ok) throw new Error('Failed to load transactions');
 
@@ -122,17 +103,18 @@ export function TransactionsPage() {
     { key: 'Pending', label: `Pending (${counts.Pending})` },
     { key: 'WaitingConfirmation', label: `Waiting (${counts.WaitingConfirmation})` },
     { key: 'Declined', label: `Declined (${counts.Declined})` },
+    { key: 'Cancelled', label: `Cancelled (${counts.Cancelled})` },
   ];
 
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
+    <div className="flex flex-col h-full">
+      <div className="flex items-center justify-between mb-3">
         <h2 className="text-2xl font-bold text-gray-900">Transactions</h2>
         <span className="text-sm text-gray-500">{total} transactions total</span>
       </div>
 
       {/* Search */}
-      <div className="relative mb-4">
+      <div className="relative mb-2">
         <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
           <SearchIcon />
         </div>
@@ -148,23 +130,27 @@ export function TransactionsPage() {
       </div>
 
       {/* Filter buttons */}
-      <div className="flex gap-2 mb-6 flex-wrap">
+      <div className="flex gap-2 mb-3 flex-wrap items-center">
         {filterButtons.map((btn) => (
-          <button
-            key={btn.key}
-            onClick={() => setFilter(btn.key)}
-            className={`px-4 py-1.5 text-sm font-medium rounded-md cursor-pointer transition-colors ${
-              filter === btn.key
-                ? 'bg-blue-600 text-white'
-                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-            }`}
-          >
-            {btn.label}
-          </button>
+          <div key={btn.key} className="relative">
+            <button
+              onClick={() => setFilter(btn.key)}
+              className={`px-4 py-1.5 text-sm font-medium rounded-md cursor-pointer transition-colors inline-flex items-center gap-1.5 ${
+                filter === btn.key
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              {btn.key !== 'all' && STATUS_TOOLTIPS[btn.key] && (
+                <InfoTooltip content={STATUS_TOOLTIPS[btn.key]} />
+              )}
+              {btn.label}
+            </button>
+          </div>
         ))}
       </div>
 
-      {error && <p className="text-red-600 mb-4">{error}</p>}
+      {error && <p className="text-red-600 mb-2">{error}</p>}
 
       {loading ? (
         <p className="text-gray-500">Loading...</p>
@@ -174,7 +160,7 @@ export function TransactionsPage() {
         </div>
       ) : (
         <>
-          <div className="overflow-x-auto border border-gray-200 rounded-lg">
+          <div className="overflow-auto border border-gray-200 rounded-lg flex-1 min-h-0">
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-gray-600 text-left">
                 <tr>
@@ -234,35 +220,11 @@ export function TransactionsPage() {
             </table>
           </div>
 
-          {/* Pagination */}
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between mt-4">
-              <p className="text-sm text-gray-500">
-                Page {page} of {totalPages}
-              </p>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  disabled={page <= 1}
-                  className="px-3 py-1.5 text-sm font-medium text-gray-600 bg-gray-100 rounded-md
-                             hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed
-                             cursor-pointer transition-colors"
-                >
-                  Previous
-                </button>
-                <button
-                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                  disabled={page >= totalPages}
-                  className="px-3 py-1.5 text-sm font-medium text-gray-600 bg-gray-100 rounded-md
-                             hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed
-                             cursor-pointer transition-colors"
-                >
-                  Next
-                </button>
-              </div>
-            </div>
-          )}
         </>
+      )}
+
+      {transactions.length > 0 && (
+        <Pagination page={page} totalPages={totalPages} setPage={setPage} />
       )}
     </div>
   );
