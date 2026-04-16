@@ -27,6 +27,17 @@ export async function getPricesForUser(telegramId: number): Promise<PricesSnapsh
   return getGlobalPrices();
 }
 
+/** Convert plan key to another method (card_6m → crypto_6m, crypto_1m → card_1m) */
+export function switchPlanMethod(planKey: string, newMethod: 'card' | 'crypto'): string {
+  const duration = planKey.replace(/^(card|crypto)_/, '');
+  return `${newMethod}_${duration}`;
+}
+
+/** Extract duration suffix from plan key (card_6m → '6m') */
+export function planDuration(planKey: string): string {
+  return planKey.replace(/^(card|crypto)_/, '');
+}
+
 /** Extract days from plan key (card_1m → 30, crypto_12m → 365) */
 export function daysFromPlanKey(planKey: string): number {
   if (planKey.endsWith('12m')) return 365;

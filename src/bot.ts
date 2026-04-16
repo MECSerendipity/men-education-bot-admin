@@ -9,6 +9,7 @@ import { registerSupportHandler } from './handlers/support.js';
 import { registerUsdtPaymentHandler } from './handlers/usdt-payment.js';
 import { registerUsdtAdminHandler } from './handlers/usdt-admin.js';
 import { registerNavigationHandlers } from './handlers/navigation.js';
+import { registerPartnerHandler } from './handlers/partner.js';
 import { handleJoinRequest } from './services/invite.js';
 import { registerRulesHandler } from './handlers/rules.js';
 
@@ -41,6 +42,7 @@ export function createBot(token: string): Telegraf {
   registerUsdtPaymentHandler(bot);
   registerUsdtAdminHandler(bot);
   registerRulesHandler(bot);
+  registerPartnerHandler(bot);
 
   // Handle join requests for private channels
   handleJoinRequest(bot);

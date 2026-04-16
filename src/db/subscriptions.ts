@@ -120,6 +120,92 @@ export async function reactivateSubscription(telegramId: number): Promise<Subscr
   }
 }
 
+/** Switch payment method on active subscription (card ↔ crypto) */
+export async function changePaymentMethod(telegramId: number, newMethod: string, newPlan: string, cardPan?: string | null): Promise<Subscription | null> {
+  const client = await db.pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const clearCard = newMethod === 'crypto';
+    const result = await client.query(
+      `UPDATE subscriptions
+       SET method = $1, plan = $2,
+           rec_token = CASE WHEN $4 THEN NULL ELSE rec_token END,
+           card_pan = CASE WHEN $4 THEN NULL ELSE card_pan END,
+           updated_at = NOW()
+       WHERE telegram_id = $3 AND status = 'Active' AND expires_at > NOW()
+       RETURNING *`,
+      [newMethod, newPlan, telegramId, clearCard],
+    );
+    const sub: Subscription | undefined = result.rows[0];
+    if (!sub) { await client.query('ROLLBACK'); return null; }
+
+    const eventCardPan = cardPan ?? sub.card_pan;
+    const eventCurrency = newMethod === 'card' ? 'UAH' : 'USDT';
+
+    await client.query(
+      `INSERT INTO subscription_events (subscription_id, telegram_id, event, plan, method, card_pan, currency, expires_at)
+       VALUES ($1, $2, 'method_changed', $3, $4, $5, $6, $7)`,
+      [sub.id, telegramId, newPlan, newMethod, eventCardPan, eventCurrency, sub.expires_at],
+    );
+
+    await client.query('COMMIT');
+    return sub;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/** Change subscription plan (duration only, method stays the same) */
+export async function changeSubscriptionPlan(telegramId: number, newPlan: string): Promise<Subscription | null> {
+  const client = await db.pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const result = await client.query(
+      `UPDATE subscriptions
+       SET plan = $1, updated_at = NOW()
+       WHERE telegram_id = $2 AND status = 'Active' AND expires_at > NOW()
+       RETURNING *`,
+      [newPlan, telegramId],
+    );
+    const sub: Subscription | undefined = result.rows[0];
+    if (!sub) { await client.query('ROLLBACK'); return null; }
+
+    const prices = sub.prices as Record<string, Record<string, unknown>> | null;
+    const planPrice = prices?.[newPlan];
+    const amount = Number(planPrice?.amount ?? 0);
+    const currency = String(planPrice?.currency ?? '');
+
+    await client.query(
+      `INSERT INTO subscription_events (subscription_id, telegram_id, event, plan, method, card_pan, amount, currency, expires_at)
+       VALUES ($1, $2, 'plan_changed', $3, $4, $5, $6, $7, $8)`,
+      [sub.id, telegramId, newPlan, sub.method, sub.card_pan, amount, currency, sub.expires_at],
+    );
+
+    await client.query('COMMIT');
+    return sub;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/** Update card details (recToken + cardPan) on active subscription */
+export async function updateSubscriptionCard(telegramId: number, recToken: string, cardPan: string | null): Promise<boolean> {
+  const result = await db.query(
+    `UPDATE subscriptions SET rec_token = $1, card_pan = $2, updated_at = NOW()
+     WHERE telegram_id = $3 AND status = 'Active' AND expires_at > NOW()`,
+    [recToken, cardPan, telegramId],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
 /**
  * Activate subscription after successful payment.
  * One subscription per user: if active — extend expires_at, otherwise create new.

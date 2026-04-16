@@ -4,7 +4,8 @@ import type { PricesSnapshot } from '../services/pricing.js';
 /** Main menu keyboard shown after /start */
 export const MAIN_MENU_KEYBOARD = {
   keyboard: [
-    [{ text: TEXTS.BTN_SUBSCRIPTION }, { text: TEXTS.BTN_MY_SUBSCRIPTION }],
+    [{ text: TEXTS.BTN_MY_SUBSCRIPTION }],
+    [{ text: TEXTS.BTN_SUBSCRIPTION }, { text: TEXTS.BTN_PARTNER }],
     [{ text: TEXTS.BTN_ACCOUNT }, { text: TEXTS.BTN_SUPPORT }],
   ],
   resize_keyboard: true,

@@ -201,7 +201,17 @@ export function TransactionsPage() {
                           {tx.method}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-gray-500 text-xs">{tx.plan}</td>
+                      <td className="px-4 py-3 text-gray-500 text-xs">
+                        {tx.plan === 'card_change' ? (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
+                            Card Change
+                          </span>
+                        ) : tx.plan === 'method_change' ? (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700">
+                            Method Change
+                          </span>
+                        ) : tx.plan}
+                      </td>
                       <td className="px-4 py-3">
                         <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
                           STATUS_STYLES[tx.status] ?? 'bg-gray-100 text-gray-500'

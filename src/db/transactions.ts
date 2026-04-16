@@ -133,3 +133,11 @@ export async function hasPendingCardTransaction(telegramId: number): Promise<boo
   );
   return result.rows.length > 0;
 }
+
+/** Link a transaction to a subscription */
+export async function linkTransactionToSubscription(transactionId: number, subscriptionId: number): Promise<void> {
+  await db.query(
+    'UPDATE transactions SET subscription_id = $1 WHERE id = $2',
+    [subscriptionId, transactionId],
+  );
+}

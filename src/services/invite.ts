@@ -30,23 +30,28 @@ export function getPrivateChannelIds(): number[] {
 
 /** Generate invite links with join request approval for all private channels and send to user */
 export async function generateAndSendInvites(bot: Telegraf, telegramId: number): Promise<void> {
-  const channels = getPrivateChannels();
-  if (channels.length === 0) {
-    logger.warn('PRIVATE_CHANNEL_* env vars not configured, skipping invite generation');
-    return;
-  }
+  const buttons = await getInviteButtons(bot, telegramId);
 
-  // Get subscription expiry date for invite_links.expires_at
+  if (buttons.length > 0) {
+    await bot.telegram.sendMessage(
+      telegramId,
+      TEXTS.INVITE_MESSAGE,
+      { reply_markup: { inline_keyboard: buttons } },
+    );
+  }
+}
+
+/** Get invite link buttons for a user (reuses existing or generates new) */
+export async function getInviteButtons(bot: Telegraf, telegramId: number): Promise<{ text: string; url: string }[][]> {
+  const channels = getPrivateChannels();
+  if (channels.length === 0) return [];
+
   const subscription = await getActiveSubscription(telegramId);
   const expiresAt = subscription?.expires_at ?? null;
-
-  // Check if user already has active invite links
   const existingLinks = await getActiveInviteLinks(telegramId);
-
   const buttons: { text: string; url: string }[][] = [];
 
   for (const channel of channels) {
-    // Reuse existing link if available — update expires_at
     const existing = existingLinks.find((l) => l.channel_id === channel.id);
     if (existing) {
       await saveInviteLink(telegramId, channel.id, existing.invite_link, expiresAt);
@@ -59,7 +64,6 @@ export async function generateAndSendInvites(bot: Telegraf, telegramId: number):
         creates_join_request: true,
         name: `user_${telegramId}`,
       });
-
       await saveInviteLink(telegramId, channel.id, invite.invite_link, expiresAt);
       buttons.push([{ text: TEXTS[channel.textKey], url: invite.invite_link }]);
     } catch (err: unknown) {
@@ -68,13 +72,7 @@ export async function generateAndSendInvites(bot: Telegraf, telegramId: number):
     }
   }
 
-  if (buttons.length > 0) {
-    await bot.telegram.sendMessage(
-      telegramId,
-      TEXTS.INVITE_MESSAGE,
-      { reply_markup: { inline_keyboard: buttons } },
-    );
-  }
+  return buttons;
 }
 
 /** Handle chat join request — approve if user has active subscription, decline otherwise */
