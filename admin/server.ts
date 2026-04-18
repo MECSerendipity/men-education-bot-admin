@@ -1004,22 +1004,62 @@ app.post(
   }
 );
 
-/* ---------- Logs API ---------- */
+/* ---------- Partners API ---------- */
 
-/** GET /api/logs/activity — user activity logs with search and filter */
+/** GET /api/partners/config — partner commission settings */
+app.get(
+  '/api/partners/config',
+  { preHandler: [authenticate] },
+  async (_request, reply) => {
+    try {
+      const result = await dbPool.query('SELECT key, value, updated_at FROM partner_config ORDER BY key');
+      const config: Record<string, string> = {};
+      for (const row of result.rows) {
+        config[row.key] = row.value;
+      }
+      return config;
+    } catch (err) {
+      app.log.error(err, 'Failed to fetch partner config');
+      return reply.status(500).send({ error: 'Failed to load partner config' });
+    }
+  }
+);
+
+/** PUT /api/partners/config — update partner config */
+app.put<{ Body: Record<string, string> }>(
+  '/api/partners/config',
+  { preHandler: [authenticate] },
+  async (request, reply) => {
+    try {
+      const updates = request.body;
+      for (const [key, value] of Object.entries(updates)) {
+        await dbPool.query(
+          'UPDATE partner_config SET value = $1, updated_at = NOW() WHERE key = $2',
+          [String(value), key],
+        );
+      }
+      return { success: true };
+    } catch (err) {
+      app.log.error(err, 'Failed to update partner config');
+      return reply.status(500).send({ error: 'Failed to save partner config' });
+    }
+  }
+);
+
+/** GET /api/partners/referrals — paginated referral list */
 app.get<{
   Querystring: { page?: string; limit?: string; search?: string; filter?: string };
 }>(
-  '/api/logs/activity',
+  '/api/partners/referrals',
   { preHandler: [authenticate] },
   async (request, reply) => {
     try {
       const page = Math.max(1, Number(request.query.page) || 1);
-      const limit = Math.min(100, Math.max(1, Number(request.query.limit) || 50));
+      const limit = Math.min(100, Math.max(1, Number(request.query.limit) || 20));
       const offset = (page - 1) * limit;
       const searchRaw = (request.query.search ?? '').trim();
       const search = searchRaw.replace(/[%_\\]/g, '\\$&');
-      const filter = request.query.filter ?? 'all'; // all | in | out
+      const filter = request.query.filter ?? 'all';
 
       const conditions: string[] = [];
       const params: unknown[] = [];
@@ -1027,14 +1067,14 @@ app.get<{
 
       if (search) {
         conditions.push(
-          `(a.telegram_id::text ILIKE $${paramIndex} OR a.username ILIKE $${paramIndex} OR a.content ILIKE $${paramIndex} OR a.handler ILIKE $${paramIndex})`
+          `(r.referrer_id::text ILIKE $${paramIndex} OR r.referred_id::text ILIKE $${paramIndex} OR u1.username ILIKE $${paramIndex} OR u2.username ILIKE $${paramIndex})`
         );
         params.push(`%${search}%`);
         paramIndex += 1;
       }
 
-      if (filter === 'in' || filter === 'out') {
-        conditions.push(`a.direction = $${paramIndex}`);
+      if (filter !== 'all') {
+        conditions.push(`r.status = $${paramIndex}`);
         params.push(filter);
         paramIndex += 1;
       }
@@ -1042,34 +1082,192 @@ app.get<{
       const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
       const countResult = await dbPool.query(
-        `SELECT COUNT(*) FROM activity_logs a ${where}`,
+        `SELECT COUNT(*) FROM referrals r
+         LEFT JOIN users u1 ON u1.telegram_id = r.referrer_id
+         LEFT JOIN users u2 ON u2.telegram_id = r.referred_id
+         ${where}`,
+        params,
+      );
+      const total = Number(countResult.rows[0].count);
+
+      // Counts per status
+      const searchConditions: string[] = [];
+      const searchParams: unknown[] = [];
+      if (search) {
+        searchConditions.push(
+          `(r.referrer_id::text ILIKE $1 OR r.referred_id::text ILIKE $1 OR u1.username ILIKE $1 OR u2.username ILIKE $1)`
+        );
+        searchParams.push(`%${search}%`);
+      }
+      const searchWhere = searchConditions.length > 0 ? `WHERE ${searchConditions.join(' AND ')}` : '';
+
+      const countsResult = await dbPool.query(
+        `SELECT
+           COUNT(*) AS total_all,
+           COUNT(*) FILTER (WHERE r.status = 'clicked') AS total_clicked,
+           COUNT(*) FILTER (WHERE r.status = 'active') AS total_active,
+           COUNT(*) FILTER (WHERE r.status = 'churned') AS total_churned
+         FROM referrals r
+         LEFT JOIN users u1 ON u1.telegram_id = r.referrer_id
+         LEFT JOIN users u2 ON u2.telegram_id = r.referred_id
+         ${searchWhere}`,
+        searchParams,
+      );
+      const counts = {
+        all: Number(countsResult.rows[0].total_all),
+        clicked: Number(countsResult.rows[0].total_clicked),
+        active: Number(countsResult.rows[0].total_active),
+        churned: Number(countsResult.rows[0].total_churned),
+      };
+
+      const dataResult = await dbPool.query(
+        `SELECT r.*,
+                u1.username AS referrer_username, u1.first_name AS referrer_first_name,
+                u2.username AS referred_username, u2.first_name AS referred_first_name
+         FROM referrals r
+         LEFT JOIN users u1 ON u1.telegram_id = r.referrer_id
+         LEFT JOIN users u2 ON u2.telegram_id = r.referred_id
+         ${where}
+         ORDER BY r.created_at DESC
+         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+        [...params, limit, offset],
+      );
+
+      return { referrals: dataResult.rows, total, page, limit, totalPages: Math.ceil(total / limit), counts };
+    } catch (err) {
+      app.log.error(err, 'Failed to fetch referrals');
+      return reply.status(500).send({ error: 'Failed to load referrals' });
+    }
+  }
+);
+
+/** GET /api/partners/transactions — partner earnings and withdrawals */
+app.get<{
+  Querystring: { page?: string; limit?: string; search?: string; filter?: string };
+}>(
+  '/api/partners/transactions',
+  { preHandler: [authenticate] },
+  async (request, reply) => {
+    try {
+      const page = Math.max(1, Number(request.query.page) || 1);
+      const limit = Math.min(100, Math.max(1, Number(request.query.limit) || 20));
+      const offset = (page - 1) * limit;
+      const searchRaw = (request.query.search ?? '').trim();
+      const search = searchRaw.replace(/[%_\\]/g, '\\$&');
+      const filter = request.query.filter ?? 'all';
+
+      const conditions: string[] = [];
+      const params: unknown[] = [];
+      let paramIndex = 1;
+
+      if (search) {
+        conditions.push(
+          `(pt.partner_id::text ILIKE $${paramIndex} OR u1.username ILIKE $${paramIndex} OR u2.username ILIKE $${paramIndex})`
+        );
+        params.push(`%${search}%`);
+        paramIndex += 1;
+      }
+
+      if (filter === 'earnings') {
+        conditions.push(`pt.type LIKE 'earning_%'`);
+      } else if (filter === 'withdrawals') {
+        conditions.push(`pt.type = 'withdrawal'`);
+      } else if (filter === 'pending') {
+        conditions.push(`pt.status = 'pending'`);
+      } else if (filter === 'rejected') {
+        conditions.push(`pt.status = 'rejected'`);
+      }
+
+      const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+      const countResult = await dbPool.query(
+        `SELECT COUNT(*) FROM partner_transactions pt
+         LEFT JOIN users u1 ON u1.telegram_id = pt.partner_id
+         LEFT JOIN users u2 ON u2.telegram_id = pt.referred_id
+         ${where}`,
         params,
       );
       const total = Number(countResult.rows[0].count);
 
       const dataResult = await dbPool.query(
-        `SELECT a.id, a.telegram_id, a.username, a.direction, a.message_type,
-                a.content, a.handler, a.created_at
-         FROM activity_logs a
+        `SELECT pt.*,
+                u1.username AS partner_username, u1.first_name AS partner_first_name,
+                u2.username AS referred_username, u2.first_name AS referred_first_name
+         FROM partner_transactions pt
+         LEFT JOIN users u1 ON u1.telegram_id = pt.partner_id
+         LEFT JOIN users u2 ON u2.telegram_id = pt.referred_id
          ${where}
-         ORDER BY a.created_at DESC
+         ORDER BY pt.created_at DESC
          LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
         [...params, limit, offset],
       );
 
-      return {
-        logs: dataResult.rows,
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
-      };
+      return { transactions: dataResult.rows, total, page, limit, totalPages: Math.ceil(total / limit) };
     } catch (err) {
-      app.log.error(err, 'Failed to fetch activity logs');
-      return reply.status(500).send({ error: 'Failed to load activity logs' });
+      app.log.error(err, 'Failed to fetch partner transactions');
+      return reply.status(500).send({ error: 'Failed to load partner transactions' });
     }
   }
 );
+
+/** GET /api/partners/balances — partners with non-zero balances */
+app.get<{
+  Querystring: { page?: string; limit?: string; search?: string };
+}>(
+  '/api/partners/balances',
+  { preHandler: [authenticate] },
+  async (request, reply) => {
+    try {
+      const page = Math.max(1, Number(request.query.page) || 1);
+      const limit = Math.min(100, Math.max(1, Number(request.query.limit) || 20));
+      const offset = (page - 1) * limit;
+      const searchRaw = (request.query.search ?? '').trim();
+      const search = searchRaw.replace(/[%_\\]/g, '\\$&');
+
+      const conditions: string[] = ['(pb.balance_uah > 0 OR pb.balance_usdt > 0 OR u.ref_code IS NOT NULL)'];
+      const params: unknown[] = [];
+      let paramIndex = 1;
+
+      if (search) {
+        conditions.push(
+          `(u.telegram_id::text ILIKE $${paramIndex} OR u.username ILIKE $${paramIndex} OR u.first_name ILIKE $${paramIndex})`
+        );
+        params.push(`%${search}%`);
+        paramIndex += 1;
+      }
+
+      const where = `WHERE ${conditions.join(' AND ')}`;
+
+      const countResult = await dbPool.query(
+        `SELECT COUNT(*) FROM users u
+         LEFT JOIN partner_balances pb ON pb.telegram_id = u.telegram_id
+         ${where}`,
+        params,
+      );
+      const total = Number(countResult.rows[0].count);
+
+      const dataResult = await dbPool.query(
+        `SELECT u.id, u.telegram_id, u.username, u.first_name, u.ref_code,
+                COALESCE(pb.balance_uah, 0) AS partner_balance_uah,
+                COALESCE(pb.balance_usdt, 0) AS partner_balance_usdt,
+                (SELECT COUNT(*) FROM referrals r WHERE r.referrer_id = u.telegram_id) AS referral_count
+         FROM users u
+         LEFT JOIN partner_balances pb ON pb.telegram_id = u.telegram_id
+         ${where}
+         ORDER BY COALESCE(pb.balance_uah, 0) + COALESCE(pb.balance_usdt, 0) DESC
+         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+        [...params, limit, offset],
+      );
+
+      return { partners: dataResult.rows, total, page, limit, totalPages: Math.ceil(total / limit) };
+    } catch (err) {
+      app.log.error(err, 'Failed to fetch partner balances');
+      return reply.status(500).send({ error: 'Failed to load partner balances' });
+    }
+  }
+);
+
+/* ---------- Logs API ---------- */
 
 /** GET /api/logs/system — system logs with search and level filter */
 app.get<{

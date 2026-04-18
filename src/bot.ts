@@ -1,6 +1,5 @@
 import { Telegraf } from 'telegraf';
 import { registerErrorHandler } from './middleware/error-handler.js';
-import { registerActivityLogger } from './middleware/activity-logger.js';
 import { registerStartHandler } from './handlers/start.js';
 import { registerSubscriptionHandler } from './handlers/subscription.js';
 import { registerMySubscriptionHandler } from './handlers/my-subscription.js';
@@ -27,9 +26,6 @@ export function createBot(token: string): Telegraf {
     if (ctx.chat && ctx.chat.type !== 'private') return;
     return next();
   });
-
-  // Activity logger — logs all user interactions
-  registerActivityLogger(bot);
 
   // Register command handlers
   registerStartHandler(bot);

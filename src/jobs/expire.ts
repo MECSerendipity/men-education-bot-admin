@@ -3,6 +3,7 @@ import { db } from '../db/index.js';
 import { revokeAccessForUser } from '../services/invite.js';
 import { logSubscriptionEvent } from '../db/subscription-events.js';
 import { logger } from '../utils/logger.js';
+import { churnReferral } from '../db/partners.js';
 
 /**
  * Expire overdue subscriptions and kick users from channels.
@@ -72,6 +73,13 @@ export async function runExpireJob(bot: Telegraf): Promise<void> {
       logger.info('Expire job: revoked access', { telegramId });
     } catch (err) {
       logger.error('Expire job: failed to revoke access', { telegramId, err });
+    }
+
+    // Break partner commission chain — this user can no longer generate commissions
+    try {
+      await churnReferral(telegramId);
+    } catch (err) {
+      logger.error('Expire job: failed to churn referral', { telegramId, err });
     }
 
     // Notify user

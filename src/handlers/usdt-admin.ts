@@ -9,6 +9,7 @@ import { sendRulesOrInvite } from './rules.js';
 import { getUserByTelegramId } from '../db/users.js';
 import { planDisplayName, buildPaymentSuccessMessage } from '../services/notifications.js';
 import { escapeHtml } from '../utils/html.js';
+import { processPartnerCommission } from '../services/partner.js';
 
 /** Register admin approval/denial handlers for USDT payments */
 export function registerUsdtAdminHandler(bot: Telegraf) {
@@ -77,6 +78,14 @@ async function handleAdminDecision(
     }
 
     await sendRulesOrInvite(bot, payment.telegram_id);
+
+    // Process partner commission
+    await processPartnerCommission(bot, {
+      referredTelegramId: payment.telegram_id,
+      transactionId: payment.id,
+      paymentAmount: payment.amount,
+      paymentCurrency: payment.currency,
+    });
 
     try {
       await ctx.editMessageText(

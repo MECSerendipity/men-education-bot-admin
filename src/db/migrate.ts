@@ -139,19 +139,8 @@ export async function migrate() {
     );
   `);
 
-  // ── activity_logs: user interactions with the bot ──
-  await db.query(`
-    CREATE TABLE IF NOT EXISTS activity_logs (
-      id              SERIAL PRIMARY KEY,
-      telegram_id     BIGINT NOT NULL,
-      username        VARCHAR(255),
-      direction       VARCHAR(4) NOT NULL,
-      message_type    VARCHAR(30) NOT NULL,
-      content         TEXT,
-      handler         VARCHAR(100),
-      created_at      TIMESTAMPTZ DEFAULT NOW()
-    );
-  `);
+  // ── drop activity_logs (no longer used) ──
+  await db.query(`DROP TABLE IF EXISTS activity_logs`);
 
   // ── system_logs: server events, jobs, payments ──
   await db.query(`
@@ -162,6 +151,72 @@ export async function migrate() {
       context         JSONB,
       created_at      TIMESTAMPTZ DEFAULT NOW()
     );
+  `);
+
+  // ── users: add ref_code for partner referral links ──
+  await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ref_code VARCHAR(20) UNIQUE`);
+
+  // ── referrals: who referred whom ──
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS referrals (
+      id              SERIAL PRIMARY KEY,
+      referrer_id     BIGINT NOT NULL,
+      referred_id     BIGINT NOT NULL UNIQUE,
+      status          VARCHAR(20) DEFAULT 'clicked',
+      created_at      TIMESTAMPTZ DEFAULT NOW(),
+      activated_at    TIMESTAMPTZ,
+      churned_at      TIMESTAMPTZ
+    );
+  `);
+
+  // ── partner_balances: partner earnings balance per user ──
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS partner_balances (
+      id              SERIAL PRIMARY KEY,
+      telegram_id     BIGINT UNIQUE NOT NULL,
+      balance_uah     DECIMAL(10,2) DEFAULT 0,
+      balance_usdt    DECIMAL(10,2) DEFAULT 0,
+      created_at      TIMESTAMPTZ DEFAULT NOW(),
+      updated_at      TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  // ── partner_transactions: commission earnings and withdrawals ──
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS partner_transactions (
+      id              SERIAL PRIMARY KEY,
+      partner_id      BIGINT NOT NULL,
+      referred_id     BIGINT,
+      transaction_id  INTEGER REFERENCES transactions(id),
+      type            VARCHAR(20) NOT NULL,
+      amount          DECIMAL(10,2) NOT NULL,
+      currency        VARCHAR(10) NOT NULL,
+      percentage      DECIMAL(5,2),
+      status          VARCHAR(20) DEFAULT 'completed',
+      admin_note      TEXT,
+      created_at      TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  // ── partner_config: commission settings ──
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS partner_config (
+      key             VARCHAR(50) PRIMARY KEY,
+      value           TEXT NOT NULL,
+      updated_at      TIMESTAMPTZ DEFAULT NOW()
+    );
+  `);
+
+  // Seed default partner config
+  await db.query(`
+    INSERT INTO partner_config (key, value) VALUES
+      ('first_enabled', 'true'),
+      ('first_percent', '77'),
+      ('recurring_enabled', 'true'),
+      ('recurring_percent', '10'),
+      ('min_withdrawal_uah', '100'),
+      ('min_withdrawal_usdt', '5')
+    ON CONFLICT (key) DO NOTHING;
   `);
 
   // ── broadcast_buttons: reusable inline buttons for broadcast messages ──
@@ -183,8 +238,11 @@ export async function migrate() {
   await db.query(`CREATE INDEX IF NOT EXISTS idx_subscription_events_telegram_id ON subscription_events (telegram_id)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_subscription_events_subscription_id ON subscription_events (subscription_id)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_invite_links_telegram_id ON invite_links (telegram_id)`);
-  await db.query(`CREATE INDEX IF NOT EXISTS idx_activity_logs_telegram_id ON activity_logs (telegram_id)`);
-  await db.query(`CREATE INDEX IF NOT EXISTS idx_activity_logs_created_at ON activity_logs (created_at DESC)`);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_partner_balances_telegram_id ON partner_balances (telegram_id)`);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON referrals (referrer_id)`);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referred_id ON referrals (referred_id)`);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_partner_transactions_partner_id ON partner_transactions (partner_id)`);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_partner_transactions_created_at ON partner_transactions (created_at DESC)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_system_logs_created_at ON system_logs (created_at DESC)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_system_logs_level ON system_logs (level)`);
 

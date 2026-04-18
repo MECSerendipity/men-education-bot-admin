@@ -10,7 +10,7 @@ import { planDisplayName } from '../services/notifications.js';
 import { escapeHtml } from '../utils/html.js';
 import { logger } from '../utils/logger.js';
 import { createTtlMap } from '../utils/ttl-map.js';
-import { MAIN_MENU_KEYBOARD } from '../keyboards/index.js';
+import { buildMainMenuKeyboard } from '../keyboards/index.js';
 import { generateOrderReference } from '../utils/order-reference.js';
 import { SUPPORT_URL, USDT } from '../config.js';
 
@@ -195,7 +195,7 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
     waitingForHash.delete(telegramId);
 
     await ctx.reply('Оплату скасовано.', {
-      reply_markup: MAIN_MENU_KEYBOARD,
+      reply_markup: buildMainMenuKeyboard(false),
     });
   });
 
@@ -244,7 +244,7 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
       'Дякую! Передаю на перевірку адміністратору. Очікуй відповіді 🔄\n\n' +
       'USDT транзакція перевіряється, я повідомлю про результат.\n' +
       'Статус: Перевіряється 🔄',
-      { reply_markup: MAIN_MENU_KEYBOARD },
+      { reply_markup: buildMainMenuKeyboard(false) },
     );
 
     // Send to admin channel for manual verification

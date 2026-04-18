@@ -8,6 +8,7 @@ import { BroadcastPage } from './BroadcastPage';
 import { TextsPage } from './TextsPage';
 import { PricesPage } from './PricesPage';
 import { LogsPage } from './LogsPage';
+import { PartnersPage } from './PartnersPage';
 
 interface DashboardPageProps {
   onLogout: () => void;
@@ -30,6 +31,8 @@ function PageContent({ page }: { page: Page }) {
       return <BroadcastPage />;
     case 'texts':
       return <TextsPage />;
+    case 'partners':
+      return <PartnersPage />;
     case 'logs':
       return <LogsPage />;
     case 'dashboard':
@@ -67,7 +70,7 @@ export function DashboardPage({ onLogout }: DashboardPageProps) {
         </header>
 
         {/* Page content */}
-        <main className="flex-1 flex flex-col overflow-hidden px-6 py-4">
+        <main className="flex-1 flex flex-col overflow-auto px-6 py-4">
           <PageContent page={currentPage} />
         </main>
       </div>

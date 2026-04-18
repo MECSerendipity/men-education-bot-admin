@@ -601,6 +601,16 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
     logger.info('Subscription cancelled by user', { telegramId: ctx.from!.id, subscriptionId: sub.id });
 
     await ctx.editMessageText(buildCancelledText(sub), { reply_markup: CANCELLED_KEYBOARD });
+
+    // Send a separate notification message so the user sees it even if they closed the chat
+    const expiresDate = formatDate(sub.expires_at);
+    try {
+      await ctx.reply(
+        `\u{1F514} Твою підписку скасовано.\n\n` +
+        `Доступ до клубу залишається до ${expiresDate}.\n` +
+        `Якщо передумаєш — віднови підписку в меню "Моя підписка".`,
+      );
+    } catch { /* ignore if reply fails */ }
   });
 
   // Reactivate cancelled subscription

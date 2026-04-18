@@ -12,6 +12,7 @@ import { reloadTexts } from '../texts/index.js';
 import { sendPaymentNotification, buildPaymentSuccessMessage } from '../services/notifications.js';
 import { getUserByTelegramId } from '../db/users.js';
 import { getPaymentMessage, deletePaymentMessage } from '../utils/payment-messages.js';
+import { processPartnerCommission } from '../services/partner.js';
 
 const MAX_BODY_SIZE = 64 * 1024; // 64 KB — more than enough for WayForPay callbacks
 
@@ -304,6 +305,14 @@ async function handleCallback(req: IncomingMessage, res: ServerResponse, bot: Te
         currency: payment.currency,
         orderReference,
         method: 'card',
+      });
+
+      // Process partner commission
+      await processPartnerCommission(bot, {
+        referredTelegramId: payment.telegram_id,
+        transactionId: payment.id,
+        paymentAmount: payment.amount,
+        paymentCurrency: payment.currency,
       });
     } else if (transactionStatus === 'Declined') {
       await updateTransactionDeclineReason(orderReference, String(data.reason ?? ''), String(data.reasonCode ?? ''));

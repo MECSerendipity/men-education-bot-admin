@@ -1,0 +1,88 @@
+import { Telegraf } from 'telegraf';
+import { getReferralByReferredId, activateReferral, getPartnerConfig, addPartnerEarning } from '../db/partners.js';
+import { logger } from '../utils/logger.js';
+
+/**
+ * Process partner commission after a successful payment.
+ * Called from: WayForPay callback, charge job, USDT admin approve.
+ *
+ * Logic:
+ * 1. Check if the paying user was referred (exists in referrals table)
+ * 2. If referral is churned — do nothing (chain is broken forever)
+ * 3. If referral is 'clicked' — this is first payment → first commission (77%)
+ * 4. If referral is 'active' — this is recurring → recurring commission (10%)
+ * 5. Check if the corresponding toggle is enabled in partner_config
+ * 6. Calculate and record the earning
+ * 7. Notify partner about the earning
+ */
+export async function processPartnerCommission(bot: Telegraf, params: {
+  referredTelegramId: number;
+  transactionId: number;
+  paymentAmount: number;
+  paymentCurrency: string;
+}): Promise<void> {
+  try {
+    const referral = await getReferralByReferredId(params.referredTelegramId);
+    if (!referral) return; // Not a referred user
+
+    if (referral.status === 'churned') return; // Chain broken
+
+    const config = await getPartnerConfig();
+
+    let type: 'earning_first' | 'earning_recurring';
+    let percentage: number;
+
+    if (referral.status === 'clicked') {
+      // First payment — activate the referral and grant first commission
+      if (!config.first_enabled) return;
+      type = 'earning_first';
+      percentage = config.first_percent;
+      await activateReferral(params.referredTelegramId);
+    } else if (referral.status === 'active') {
+      // Recurring payment
+      if (!config.recurring_enabled) return;
+      // If first commission is disabled, recurring is also disabled
+      if (!config.first_enabled) return;
+      type = 'earning_recurring';
+      percentage = config.recurring_percent;
+    } else {
+      return;
+    }
+
+    const earnedAmount = Math.round(params.paymentAmount * percentage) / 100;
+    if (earnedAmount <= 0) return;
+
+    await addPartnerEarning({
+      partnerId: referral.referrer_id,
+      referredId: params.referredTelegramId,
+      transactionId: params.transactionId,
+      type,
+      amount: earnedAmount,
+      currency: params.paymentCurrency,
+      percentage,
+    });
+
+    logger.info('Partner commission processed', {
+      partnerId: referral.referrer_id,
+      referredId: params.referredTelegramId,
+      type,
+      amount: earnedAmount,
+      currency: params.paymentCurrency,
+      percentage,
+    });
+
+    // Notify partner about the earning
+    const label = type === 'earning_first' ? 'першу оплату' : 'автопродовження';
+    try {
+      await bot.telegram.sendMessage(
+        referral.referrer_id,
+        `\u{1F4B0} Тобі нараховано ${earnedAmount.toFixed(2)} ${params.paymentCurrency} за ${label} реферала (${percentage}%).`,
+      );
+    } catch {
+      // Partner may have blocked the bot — not critical
+    }
+  } catch (err) {
+    // Commission processing should never break the main payment flow
+    logger.error('Failed to process partner commission', err);
+  }
+}

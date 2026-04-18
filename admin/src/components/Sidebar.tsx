@@ -1,5 +1,5 @@
 /** Available navigation pages */
-export type Page = 'dashboard' | 'users' | 'subscriptions' | 'transactions' | 'prices' | 'statistics' | 'broadcast' | 'texts' | 'logs';
+export type Page = 'dashboard' | 'users' | 'subscriptions' | 'transactions' | 'prices' | 'statistics' | 'broadcast' | 'texts' | 'partners' | 'logs';
 
 interface SidebarProps {
   currentPage: Page;
@@ -100,6 +100,17 @@ function TextsIcon() {
   );
 }
 
+/** Partners handshake icon */
+function PartnersIcon() {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" strokeWidth={1.5} className="w-5 h-5">
+      <path strokeLinecap="round" strokeLinejoin="round"
+            d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m9.86-2.54a4.5 4.5 0 00-6.364-6.364L4.5 8.31m10.003.687l4.5-4.5a4.5 4.5 0 016.364 6.364l-1.757 1.757" />
+    </svg>
+  );
+}
+
 /** Terminal/logs icon */
 function LogsIcon() {
   return (
@@ -117,8 +128,9 @@ const NAV_ITEMS: NavItem[] = [
   { id: 'subscriptions', label: 'Subscriptions', icon: <SubscriptionsIcon /> },
   { id: 'transactions', label: 'Transactions', icon: <TransactionsIcon /> },
   { id: 'prices', label: 'Prices', icon: <PricesIcon /> },
-  { id: 'statistics', label: 'Statistics', icon: <ChartIcon /> },
+  { id: 'partners', label: 'Partners', icon: <PartnersIcon /> },
   { id: 'broadcast', label: 'Broadcast', icon: <MegaphoneIcon /> },
+  { id: 'statistics', label: 'Statistics', icon: <ChartIcon /> },
   { id: 'texts', label: 'Texts', icon: <TextsIcon /> },
   { id: 'logs', label: 'Logs', icon: <LogsIcon /> },
 ];

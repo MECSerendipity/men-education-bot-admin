@@ -1,6 +1,6 @@
 import { Telegraf } from 'telegraf';
 import { hasAcceptedRules, acceptRules } from '../db/users.js';
-import { MAIN_MENU_KEYBOARD } from '../keyboards/index.js';
+import { buildMainMenuKeyboard } from '../keyboards/index.js';
 import { TEXTS } from '../texts/index.js';
 import { logger } from '../utils/logger.js';
 import { generateAndSendInvites } from '../services/invite.js';
@@ -72,7 +72,7 @@ export function registerRulesHandler(bot: Telegraf) {
 
     // Restore main menu keyboard
     await ctx.reply(TEXTS.MAIN_MENU, {
-      reply_markup: MAIN_MENU_KEYBOARD,
+      reply_markup: buildMainMenuKeyboard(true),
     });
 
     await sendInviteLink(bot, ctx.from.id);

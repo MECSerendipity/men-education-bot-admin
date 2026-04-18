@@ -2,14 +2,20 @@ import { TEXTS } from '../texts/index.js';
 import type { PricesSnapshot } from '../services/pricing.js';
 
 /** Main menu keyboard shown after /start */
-export const MAIN_MENU_KEYBOARD = {
-  keyboard: [
-    [{ text: TEXTS.BTN_MY_SUBSCRIPTION }],
-    [{ text: TEXTS.BTN_SUBSCRIPTION }, { text: TEXTS.BTN_PARTNER }],
-    [{ text: TEXTS.BTN_ACCOUNT }, { text: TEXTS.BTN_SUPPORT }],
-  ],
-  resize_keyboard: true,
-};
+export function buildMainMenuKeyboard(isSubscribed: boolean) {
+  const rows = isSubscribed
+    ? [
+        [{ text: TEXTS.BTN_MY_SUBSCRIPTION }],
+        [{ text: TEXTS.BTN_SUBSCRIPTION }, { text: TEXTS.BTN_PARTNER }],
+        [{ text: TEXTS.BTN_ACCOUNT }, { text: TEXTS.BTN_SUPPORT }],
+      ]
+    : [
+        [{ text: TEXTS.BTN_SUBSCRIPTION }, { text: TEXTS.BTN_MY_SUBSCRIPTION }],
+        [{ text: TEXTS.BTN_ACCOUNT }, { text: TEXTS.BTN_SUPPORT }],
+      ];
+  return { keyboard: rows, resize_keyboard: true };
+}
+
 
 /** Build tariff button text: "🎩 6 місяців — 3850 UAH / 90 USDT" */
 function tariffButton(prices: PricesSnapshot, cardKey: string, cryptoKey: string): string {

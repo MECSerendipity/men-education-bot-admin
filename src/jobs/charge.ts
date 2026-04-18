@@ -6,6 +6,7 @@ import { activateSubscription, type Subscription } from '../db/subscriptions.js'
 import { logger } from '../utils/logger.js';
 import { sendPaymentNotification, buildPaymentSuccessMessage } from '../services/notifications.js';
 import { getUserByTelegramId } from '../db/users.js';
+import { processPartnerCommission } from '../services/partner.js';
 
 interface PlanPrice {
   key: string;
@@ -147,6 +148,14 @@ export async function runCardChargeJob(bot: Telegraf): Promise<void> {
         currency: planPrice.currency,
         orderReference: orderRef,
         method: 'card',
+      });
+
+      // Process partner commission for auto-renewal
+      await processPartnerCommission(bot, {
+        referredTelegramId: sub.telegram_id,
+        transactionId: tx.id,
+        paymentAmount: planPrice.amount,
+        paymentCurrency: planPrice.currency,
       });
     } else {
       await updateTransactionStatus(orderRef, 'Declined');
