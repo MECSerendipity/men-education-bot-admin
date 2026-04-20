@@ -146,6 +146,65 @@ async function handleCryptoPayment(ctx: Context, duration: string): Promise<void
   }
 }
 
+/**
+ * Send crypto payment reminder to a user via bot.telegram.
+ * Used by crypto-reminder job for auto-renewal reminders.
+ * Shows compact message with wallet address + "Як оплатити?" button for instructions.
+ * Sets pendingPayment state so "Я оплатив" flow works.
+ */
+export async function sendCryptoPaymentReminder(bot: Telegraf, telegramId: number, planKey: string): Promise<void> {
+  const prices = await getPricesForUser(telegramId);
+  const plan = prices[planKey] as PriceRow | undefined;
+  if (!plan) return;
+
+  const walletAddress = USDT.walletAddress;
+  if (!walletAddress) return;
+
+  const orderReference = generateOrderReference(telegramId, 'crypto');
+
+  pendingPayment.set(telegramId, {
+    orderReference,
+    planKey,
+    plan,
+    prices,
+    createdAt: Date.now(),
+  });
+
+  await bot.telegram.sendMessage(
+    telegramId,
+    `\u{1F514} Нагадування про продовження підписки\n\n` +
+    `\u{1F4E6} ${escapeHtml(plan.display_name)}\n` +
+    `\u{2139}\u{FE0F} Сума оплати — ${plan.amount} USDT\n\n` +
+    `Монета: Tether (USDT)\n` +
+    `Мережа: TRON — TRC20\n\n` +
+    `До сплати: <b>${plan.amount} USDT</b>\n\n` +
+    `Тисни на адресу, щоб скопіювати \u{1F447}\n` +
+    `<code>${escapeHtml(walletAddress)}</code>`,
+    {
+      parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '\u{2753} Як оплатити?', callback_data: 'crypto_renew:how_to_pay' }],
+        ],
+      },
+    },
+  );
+
+  await bot.telegram.sendMessage(
+    telegramId,
+    'Продовжимо? \u{1F447}',
+    {
+      reply_markup: {
+        keyboard: [
+          [{ text: TEXTS.BTN_USDT_PAID }],
+          [{ text: TEXTS.BTN_HOME }],
+        ],
+        resize_keyboard: true,
+      },
+    },
+  );
+}
+
 /** Register crypto payment handlers */
 export function registerUsdtPaymentHandler(bot: Telegraf) {
   // Crypto payment selected from inline flow (pay:usdt:12m, pay:usdt:6m, pay:usdt:1m)
@@ -156,18 +215,107 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
     await handleCryptoPayment(ctx, duration);
   });
 
+  // "Як оплатити?" — show instructions for crypto renewal reminder
+  bot.action('crypto_renew:how_to_pay', async (ctx) => {
+    await ctx.answerCbQuery();
+    await ctx.editMessageText(
+      'Прочитай уважно інструкцію \u{1F447}\n\n' +
+      'Важливо! При переведенні з тебе зніметься комісія, тому конвертуй свою валюту в крипту З ВРАХУВАННЯМ КОМІСІЇ.\n\n' +
+      'Після оплати ОБОВ\'ЯЗКОВО скопіюй TxID (Хеш) транзакції \u{2757}\n' +
+      'І ТІЛЬКИ ПІСЛЯ ОПЛАТИ - натисни кнопку "\u{2705} Я оплатив" \u{1F447}\n' +
+      'Далі дотримуйся інструкцій бота.\n\n' +
+      'Виникло питання до підтримки - натисни кнопку "Є питання\u{2753}"',
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: 'Інструкція як дивитись хеш транзакції \u{1F517}', url: USDT.hashInstructionUrl }],
+            [{ text: 'Інструкція як поповняти крипту \u{1F517}', url: USDT.topUpInstructionUrl }],
+            [{ text: 'Є питання \u{2753}', url: SUPPORT_URL }],
+            [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'crypto_renew:back' }],
+          ],
+        },
+      },
+    );
+  });
+
+  // Back from "Як оплатити?" — restore the compact payment message
+  bot.action('crypto_renew:back', async (ctx) => {
+    await ctx.answerCbQuery();
+    const telegramId = ctx.from.id;
+    let state = pendingPayment.get(telegramId);
+
+    // If state lost (bot restarted), recreate from active subscription
+    if (!state) {
+      const { getActiveSubscription } = await import('../db/subscriptions.js');
+      const sub = await getActiveSubscription(telegramId);
+      if (sub && sub.method === 'crypto' && sub.prices) {
+        const prices = sub.prices as PricesSnapshot;
+        const plan = prices[sub.plan] as PriceRow | undefined;
+        if (plan) {
+          const orderReference = generateOrderReference(telegramId, 'crypto');
+          state = { orderReference, planKey: sub.plan, plan, prices, createdAt: Date.now() };
+          pendingPayment.set(telegramId, state);
+        }
+      }
+    }
+
+    if (!state) {
+      await ctx.editMessageText('Не вдалося завантажити дані. Натисни /start щоб почати спочатку.');
+      return;
+    }
+
+    const walletAddress = USDT.walletAddress;
+    await ctx.editMessageText(
+      `\u{1F514} Нагадування про продовження підписки\n\n` +
+      `\u{1F4E6} ${escapeHtml(state.plan.display_name)}\n` +
+      `\u{2139}\u{FE0F} Сума оплати — ${state.plan.amount} USDT\n\n` +
+      `Монета: Tether (USDT)\n` +
+      `Мережа: TRON — TRC20\n\n` +
+      `До сплати: <b>${state.plan.amount} USDT</b>\n\n` +
+      `Тисни на адресу, щоб скопіювати \u{1F447}\n` +
+      `<code>${escapeHtml(walletAddress)}</code>`,
+      {
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '\u{2753} Як оплатити?', callback_data: 'crypto_renew:how_to_pay' }],
+          ],
+        },
+      },
+    );
+  });
+
   // "✅ Я ОПЛАТИВ" button — move from pendingPayment to waitingForHash
   bot.hears(TEXTS.BTN_USDT_PAID, async (ctx) => {
     const telegramId = ctx.from.id;
-    const state = pendingPayment.get(telegramId);
+    let state = pendingPayment.get(telegramId);
 
+    // If state lost (bot restarted / TTL expired), try to recreate from active subscription
     if (!state) {
       if (await hasPendingCryptoTransaction(telegramId)) {
         await ctx.reply('Твій USDT платіж вже на перевірці. Очікуй відповіді.');
         return;
       }
-      await ctx.reply('У тебе немає активного USDT платежу. Обери тариф спочатку.');
-      return;
+
+      const { getActiveSubscription } = await import('../db/subscriptions.js');
+      const sub = await getActiveSubscription(telegramId);
+      if (sub && sub.method === 'crypto' && sub.prices) {
+        // Only allow if subscription expires within 2 days
+        const daysLeft = (sub.expires_at.getTime() - Date.now()) / (1000 * 60 * 60 * 24);
+        if (daysLeft <= 2) {
+          const prices = sub.prices as PricesSnapshot;
+          const plan = prices[sub.plan] as PriceRow | undefined;
+          if (plan) {
+            const orderReference = generateOrderReference(telegramId, 'crypto');
+            state = { orderReference, planKey: sub.plan, plan, prices, createdAt: Date.now() };
+          }
+        }
+      }
+
+      if (!state) {
+        await ctx.reply('У тебе немає активного USDT платежу. Обери тариф спочатку.');
+        return;
+      }
     }
 
     // Move to waitingForHash (15 min TTL)

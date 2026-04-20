@@ -3,13 +3,13 @@ import { Telegraf } from 'telegraf';
 import { logger } from '../utils/logger.js';
 import { generateCallbackSignature, generateResponseSignature } from '../services/wayforpay.js';
 import { getTransactionByOrderReference, updateTransactionStatus, updateTransactionCard, updateTransactionDeclineReason, claimTransaction, linkTransactionToSubscription } from '../db/transactions.js';
-import { activateSubscription, updateSubscriptionCard, getActiveSubscription, changePaymentMethod } from '../db/subscriptions.js';
+import { activateSubscription, updateSubscriptionCard, getActiveSubscription, changePaymentMethod, hasActiveSubscription } from '../db/subscriptions.js';
 import { logSubscriptionEvent } from '../db/subscription-events.js';
 import { getPricesForUser, daysFromPlanKey, switchPlanMethod } from '../services/pricing.js';
 import { deleteOffersForUser } from '../db/prices.js';
 import { sendRulesOrInvite } from '../handlers/rules.js';
 import { reloadTexts } from '../texts/index.js';
-import { sendPaymentNotification, buildPaymentSuccessMessage } from '../services/notifications.js';
+import { sendPaymentNotification, buildPaymentSuccessMessage, buildFirstPaymentDeclinedMessage } from '../services/notifications.js';
 import { getUserByTelegramId } from '../db/users.js';
 import { getPaymentMessage, deletePaymentMessage } from '../utils/payment-messages.js';
 import { processPartnerCommission } from '../services/partner.js';
@@ -138,28 +138,33 @@ async function handleCallback(req: IncomingMessage, res: ServerResponse, bot: Te
     recToken: data.recToken ? 'present' : 'absent',
   });
 
+  const orderReference = String(data.orderReference ?? '');
+  const transactionStatus = String(data.transactionStatus ?? '');
+
   // Verify signature
   const expectedSignature = generateCallbackSignature({
     merchantAccount: String(data.merchantAccount ?? ''),
-    orderReference: String(data.orderReference ?? ''),
+    orderReference,
     amount: String(data.amount ?? ''),
     currency: String(data.currency ?? ''),
     authCode: String(data.authCode ?? ''),
     cardPan: String(data.cardPan ?? ''),
-    transactionStatus: String(data.transactionStatus ?? ''),
+    transactionStatus,
     reasonCode: String(data.reasonCode ?? ''),
   });
 
   if (data.merchantSignature !== expectedSignature) {
-    logger.warn('WayForPay callback signature mismatch', {
+    logger.warn('WayForPay callback signature mismatch — rejecting', {
       expected: expectedSignature,
       received: data.merchantSignature,
     });
-    // Still respond to WayForPay to stop retries
+    // Respond to WayForPay to stop retries, but do NOT process the payment
+    const time = Math.floor(Date.now() / 1000);
+    const responseSignature = generateResponseSignature(orderReference, 'accept', time);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ orderReference, status: 'accept', time, signature: responseSignature }));
+    return;
   }
-
-  const orderReference = String(data.orderReference ?? '');
-  const transactionStatus = String(data.transactionStatus ?? '');
   const recToken = data.recToken ? String(data.recToken) : null;
   const cardPan = data.cardPan ? String(data.cardPan) : null;
 
@@ -167,9 +172,20 @@ async function handleCallback(req: IncomingMessage, res: ServerResponse, bot: Te
   const payment = await getTransactionByOrderReference(orderReference);
 
   if (payment) {
-    // Skip if already fully processed (Approved/Declined are final)
-    if (payment.status === 'Approved' || payment.status === 'Declined') {
-      logger.info('Callback for already processed payment, skipping', { orderReference, currentStatus: payment.status });
+    // Skip if already approved (truly final — money received, subscription activated)
+    if (payment.status === 'Approved') {
+      logger.info('Callback for already approved payment, skipping', { orderReference });
+      const time = Math.floor(Date.now() / 1000);
+      const responseSignature = generateResponseSignature(orderReference, 'accept', time);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ orderReference, status: 'accept', time, signature: responseSignature }));
+      return;
+    }
+
+    // Declined is NOT final — user may retry with the same invoice link and succeed
+    // But skip duplicate Declined callbacks
+    if (payment.status === 'Declined' && transactionStatus === 'Declined') {
+      logger.info('Duplicate Declined callback, skipping', { orderReference });
       const time = Math.floor(Date.now() / 1000);
       const responseSignature = generateResponseSignature(orderReference, 'accept', time);
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -260,6 +276,9 @@ async function handleCallback(req: IncomingMessage, res: ServerResponse, bot: Te
     } else if (transactionStatus === 'Approved') {
       const days = daysFromPlanKey(payment.plan);
 
+      // Check if this is a renewal (user already has active subscription)
+      const isRenewal = await hasActiveSubscription(payment.telegram_id);
+
       // Save card details on transaction
       await updateTransactionCard(orderReference, recToken, cardPan);
 
@@ -285,12 +304,15 @@ async function handleCallback(req: IncomingMessage, res: ServerResponse, bot: Te
         amount: payment.amount,
         currency: payment.currency,
         expiresAt: subscription.expires_at,
+        isRenewal,
       });
 
       await sendConfirmation(bot, payment.telegram_id, orderReference, successText);
 
-      // Send rules or invite link
-      await sendRulesOrInvite(bot, payment.telegram_id);
+      // Send rules or invite link only for new subscriptions
+      if (!isRenewal) {
+        await sendRulesOrInvite(bot, payment.telegram_id);
+      }
 
       // Send card payment notification to admin channel
       const user = await getUserByTelegramId(payment.telegram_id);
@@ -330,13 +352,15 @@ async function handleCallback(req: IncomingMessage, res: ServerResponse, bot: Te
         const keyboard = { inline_keyboard: [[{ text: '\u{1F4CB} Моя підписка', callback_data: 'sub:back' }]] };
         await sendConfirmation(bot, payment.telegram_id, orderReference, declineText, keyboard);
       } else {
-        const reason = String(data.reason ?? 'Невідома помилка');
         try {
+          const declinedText = buildFirstPaymentDeclinedMessage({
+            plan: payment.plan,
+            amount: payment.amount,
+            currency: payment.currency,
+          });
           await bot.telegram.sendMessage(
             payment.telegram_id,
-            `\u{274C} Оплату відхилено\n\n` +
-            `Причина: ${reason}\n\n` +
-            `Спробуй ще раз або обери інший спосіб оплати.`,
+            declinedText,
             {
               reply_markup: {
                 inline_keyboard: [

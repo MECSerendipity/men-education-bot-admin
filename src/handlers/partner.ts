@@ -3,7 +3,7 @@ import { TEXTS } from '../texts/index.js';
 import { hasActiveSubscription } from '../db/subscriptions.js';
 import { getOrCreateRefCode, getPartnerStats, getPartnerBalance, getPartnerConfig, getPartnerReferrals, createWithdrawalRequest, getPendingWithdrawal } from '../db/partners.js';
 import { getUserByTelegramId } from '../db/users.js';
-import { USDT, SUPPORT_URL } from '../config.js';
+import { USDT, SUPPORT_URL, PARTNER } from '../config.js';
 import { escapeHtml } from '../utils/html.js';
 import { db } from '../db/index.js';
 import { processWithdrawal } from '../db/partners.js';
@@ -17,6 +17,26 @@ async function getBotUsername(bot: Telegraf): Promise<string> {
   const me = await bot.telegram.getMe();
   botUsername = me.username;
   return botUsername;
+}
+
+/** Check subscription and show error if not active. Returns true if blocked. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function requireSubscription(ctx: any): Promise<boolean> {
+  const isSubscribed = await hasActiveSubscription(ctx.from.id);
+  if (!isSubscribed) {
+    await ctx.editMessageText(
+      'Меню Партнера доступне тільки для користувачів з активною підпискою.',
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: 'Оформити підписку', callback_data: 'subscription' }],
+          ],
+        },
+      },
+    );
+    return true;
+  }
+  return false;
 }
 
 /** Register partner menu handlers */
@@ -46,6 +66,7 @@ export function registerPartnerHandler(bot: Telegraf) {
   // Referral link with share button
   bot.action('partner:link', async (ctx) => {
     await ctx.answerCbQuery();
+    if (await requireSubscription(ctx)) return;
     const telegramId = ctx.from.id;
     const refCode = await getOrCreateRefCode(telegramId);
     const username = await getBotUsername(bot);
@@ -72,25 +93,22 @@ export function registerPartnerHandler(bot: Telegraf) {
   // Stats
   bot.action('partner:stats', async (ctx) => {
     await ctx.answerCbQuery();
+    if (await requireSubscription(ctx)) return;
     const telegramId = ctx.from.id;
     const stats = await getPartnerStats(telegramId);
-    const config = await getPartnerConfig();
 
     const paid = stats.active + stats.churned;
 
+    let earningsText = 'Мої нарахування:\n';
+    earningsText += `- Всього зароблено: ${stats.totalEarnedUah.toFixed(2)} UAH | Виведено: ${stats.totalWithdrawnUah.toFixed(2)} UAH\n`;
+    earningsText += `- Всього зароблено: ${stats.totalEarnedUsdt.toFixed(2)} USDT | Виведено: ${stats.totalWithdrawnUsdt.toFixed(2)} USDT`;
+
     await ctx.editMessageText(
-      `Статистика\n\n` +
-      `Кліків: ${stats.clicks}\n` +
+      `\u{1F4C8} Статистика\n\n` +
+      `Перейшли за посиланням: ${stats.clicks}\n` +
       `Оплатили підписку: ${paid}\n` +
-      `Активних рефералів: ${stats.active}\n` +
-      `Відписались: ${stats.churned}\n\n` +
-      `Комісії:\n` +
-      `- Перша оплата: ${config.first_enabled ? config.first_percent + '%' : 'вимкнено'}\n` +
-      `- Автопродовження: ${config.recurring_enabled ? config.recurring_percent + '%' : 'вимкнено'}\n\n` +
-      `Всього зароблено:\n` +
-      (stats.totalEarnedUah > 0 ? `- ${stats.totalEarnedUah.toFixed(2)} UAH\n` : '') +
-      (stats.totalEarnedUsdt > 0 ? `- ${stats.totalEarnedUsdt.toFixed(2)} USDT\n` : '') +
-      (stats.totalEarnedUah === 0 && stats.totalEarnedUsdt === 0 ? '- Ще немає нарахувань\n' : ''),
+      `Активні реферали: ${stats.active}\n\n` +
+      earningsText,
       {
         reply_markup: {
           inline_keyboard: [
@@ -104,6 +122,7 @@ export function registerPartnerHandler(bot: Telegraf) {
   // Balance
   bot.action('partner:balance', async (ctx) => {
     await ctx.answerCbQuery();
+    if (await requireSubscription(ctx)) return;
     await showBalancePage(ctx);
   });
 
@@ -257,7 +276,7 @@ export function registerPartnerHandler(bot: Telegraf) {
             `#withdrawal`,
             {
               parse_mode: 'HTML',
-              message_thread_id: 7,
+              message_thread_id: Number(PARTNER.withdrawalThreadId) || undefined,
               reply_markup: {
                 inline_keyboard: [
                   [
@@ -362,6 +381,7 @@ export function registerPartnerHandler(bot: Telegraf) {
   // My referrals — show info + download button if has referrals
   bot.action('partner:referrals', async (ctx) => {
     await ctx.answerCbQuery();
+    if (await requireSubscription(ctx)) return;
     const telegramId = ctx.from.id;
     const referrals = await getPartnerReferrals(telegramId);
 

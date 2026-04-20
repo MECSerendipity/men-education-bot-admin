@@ -22,3 +22,9 @@ export const USDT = {
 export const CARD = {
   adminThreadId: process.env.CARD_ADMIN_THREAD_ID ?? '',
 } as const;
+
+/** Partner system admin notification config */
+export const PARTNER = {
+  withdrawalThreadId: process.env.PARTNER_WITHDRAWAL_THREAD_ID ?? '7',
+  churnThreadId: process.env.PARTNER_CHURN_THREAD_ID ?? '42',
+} as const;

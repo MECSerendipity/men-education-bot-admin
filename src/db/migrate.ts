@@ -63,6 +63,11 @@ export async function migrate() {
   // ── migrations: add columns if missing ──
   await db.query(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS decline_reason TEXT`);
   await db.query(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS decline_reason_code VARCHAR(20)`);
+  await db.query(`ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS access_revoked BOOLEAN DEFAULT FALSE`);
+
+  // Backfill: mark already processed subscriptions
+  await db.query(`UPDATE subscriptions SET access_revoked = TRUE WHERE status = 'Expired' AND access_revoked = FALSE`);
+  await db.query(`UPDATE subscriptions SET access_revoked = TRUE WHERE status = 'Cancelled' AND expires_at < NOW() AND access_revoked = FALSE`);
 
   // ── prices: global plan prices ──
   await db.query(`

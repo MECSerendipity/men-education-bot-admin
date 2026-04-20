@@ -26,16 +26,70 @@ export function buildPaymentSuccessMessage(params: {
   amount: number;
   currency: string;
   expiresAt: Date;
+  isRenewal?: boolean;
 }): string {
+  const statusText = params.isRenewal
+    ? 'Підписка продовжена! Дякую \u{1F4AA}'
+    : 'Підписка активована! Дякую \u{1F4AA}';
+
   return (
     `\u{2705} Оплата підтверджена\n\n` +
     `▸ План: ${planDisplayName(params.plan)}\n` +
     `▸ Сума: ${params.amount} ${params.currency}\n` +
     `\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n` +
-    `Підписка активована! Дякую \u{1F4AA}\n\n` +
+    `${statusText}\n\n` +
     `\u{1F5D3}\u{FE0F} Дата наступного платежу: ${formatDate(params.expiresAt)}\n` +
     `▸ Сума: ${params.amount} ${params.currency}\n\n` +
     `З повагою, Men Education Team!`
+  );
+}
+
+/** Build declined message for first payment (WayForPay callback) */
+export function buildFirstPaymentDeclinedMessage(params: {
+  plan: string;
+  amount: number;
+  currency: string;
+}): string {
+  return (
+    `\u{274C} Оплата не підтверджена\n\n` +
+    `▸ План: ${planDisplayName(params.plan)}\n` +
+    `▸ Сума: ${params.amount} ${params.currency}\n` +
+    `\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n` +
+    `Спробуй ще раз або обери інший спосіб оплати.`
+  );
+}
+
+/** Build declined message for auto-renewal (charge job) */
+export function buildChargeFailedMessage(params: {
+  plan: string;
+  amount: number;
+  currency: string;
+  cardPan: string | null;
+}): string {
+  return (
+    `\u{274C} Не вдалося автоматично продовжити підписку\n\n` +
+    `▸ План: ${planDisplayName(params.plan)}\n` +
+    `▸ Сума: ${params.amount} ${params.currency}\n` +
+    (params.cardPan ? `▸ Картка: ${params.cardPan}\n` : '') +
+    `\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n` +
+    `Перевір картку і спробуй оплатити ще раз \u{1F447}`
+  );
+}
+
+/** Build declined message for manual retry (after pressing "Оплатити зараз") */
+export function buildRetryFailedMessage(params: {
+  plan: string;
+  amount: number;
+  currency: string;
+  cardPan: string | null;
+}): string {
+  return (
+    `\u{274C} Оплата не підтверджена\n\n` +
+    `▸ План: ${planDisplayName(params.plan)}\n` +
+    `▸ Сума: ${params.amount} ${params.currency}\n` +
+    (params.cardPan ? `▸ Картка: ${params.cardPan}\n` : '') +
+    `\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n` +
+    `Виріши проблему, а я завтра спробую знову.`
   );
 }
 

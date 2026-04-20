@@ -589,7 +589,7 @@ app.get<{
 
       const dataResult = await dbPool.query(
         `SELECT t.id, t.telegram_id, t.amount, t.currency, t.method, t.plan,
-                t.status, t.order_reference, t.card_pan, t.tx_hash, t.created_at,
+                t.status, t.order_reference, t.card_pan, t.tx_hash, t.decline_reason, t.created_at,
                 u.username, u.first_name, u.last_name
          FROM transactions t
          LEFT JOIN users u ON u.telegram_id = t.telegram_id
@@ -1025,6 +1025,16 @@ app.get(
   }
 );
 
+/** Allowed partner config keys and their validation rules */
+const PARTNER_CONFIG_RULES: Record<string, (v: string) => string | null> = {
+  first_enabled: (v) => (v === 'true' || v === 'false') ? null : 'Must be true or false',
+  first_percent: (v) => { const n = Number(v); return (!isNaN(n) && n >= 1 && n <= 99) ? null : 'Must be between 1 and 99'; },
+  recurring_enabled: (v) => (v === 'true' || v === 'false') ? null : 'Must be true or false',
+  recurring_percent: (v) => { const n = Number(v); return (!isNaN(n) && n >= 1 && n <= 99) ? null : 'Must be between 1 and 99'; },
+  min_withdrawal_uah: (v) => { const n = Number(v); return (!isNaN(n) && n >= 1) ? null : 'Must be at least 1'; },
+  min_withdrawal_usdt: (v) => { const n = Number(v); return (!isNaN(n) && n >= 1) ? null : 'Must be at least 1'; },
+};
+
 /** PUT /api/partners/config — update partner config */
 app.put<{ Body: Record<string, string> }>(
   '/api/partners/config',
@@ -1032,6 +1042,15 @@ app.put<{ Body: Record<string, string> }>(
   async (request, reply) => {
     try {
       const updates = request.body;
+
+      // Validate all values before saving
+      for (const [key, value] of Object.entries(updates)) {
+        const rule = PARTNER_CONFIG_RULES[key];
+        if (!rule) return reply.status(400).send({ error: `Unknown config key: ${key}` });
+        const error = rule(String(value));
+        if (error) return reply.status(400).send({ error: `${key}: ${error}` });
+      }
+
       for (const [key, value] of Object.entries(updates)) {
         await dbPool.query(
           'UPDATE partner_config SET value = $1, updated_at = NOW() WHERE key = $2',

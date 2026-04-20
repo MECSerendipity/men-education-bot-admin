@@ -119,15 +119,17 @@ export async function churnReferral(referredId: number): Promise<void> {
   );
 }
 
-/** Get partner stats: clicks, active referrals, churned */
+/** Get partner stats: clicks, active referrals, churned, earnings, withdrawals */
 export async function getPartnerStats(referrerId: number): Promise<{
   clicks: number;
   active: number;
   churned: number;
   totalEarnedUah: number;
   totalEarnedUsdt: number;
+  totalWithdrawnUah: number;
+  totalWithdrawnUsdt: number;
 }> {
-  const [countsResult, earningsResult] = await Promise.all([
+  const [countsResult, earningsResult, withdrawalsResult] = await Promise.all([
     db.query(
       `SELECT
         COUNT(*) AS clicks,
@@ -144,6 +146,14 @@ export async function getPartnerStats(referrerId: number): Promise<{
        WHERE partner_id = $1 AND type LIKE 'earning_%' AND status = 'completed'`,
       [referrerId],
     ),
+    db.query(
+      `SELECT
+        COALESCE(SUM(amount) FILTER (WHERE currency = 'UAH'), 0) AS total_uah,
+        COALESCE(SUM(amount) FILTER (WHERE currency = 'USDT'), 0) AS total_usdt
+       FROM partner_transactions
+       WHERE partner_id = $1 AND type = 'withdrawal' AND status = 'approved'`,
+      [referrerId],
+    ),
   ]);
 
   return {
@@ -152,6 +162,8 @@ export async function getPartnerStats(referrerId: number): Promise<{
     churned: Number(countsResult.rows[0].churned),
     totalEarnedUah: Number(earningsResult.rows[0].total_uah),
     totalEarnedUsdt: Number(earningsResult.rows[0].total_usdt),
+    totalWithdrawnUah: Number(withdrawalsResult.rows[0].total_uah),
+    totalWithdrawnUsdt: Number(withdrawalsResult.rows[0].total_usdt),
   };
 }
 

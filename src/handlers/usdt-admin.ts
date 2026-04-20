@@ -1,6 +1,6 @@
 import { Telegraf, type Context } from 'telegraf';
 import { getTransactionByOrderReference, claimTransaction, isFirstApprovedTransaction } from '../db/transactions.js';
-import { activateSubscription } from '../db/subscriptions.js';
+import { activateSubscription, hasActiveSubscription } from '../db/subscriptions.js';
 import { getPricesForUser, daysFromPlanKey } from '../services/pricing.js';
 import { deleteOffersForUser } from '../db/prices.js';
 import { logger } from '../utils/logger.js';
@@ -54,6 +54,10 @@ async function handleAdminDecision(
 
   if (approved) {
     const days = daysFromPlanKey(payment.plan);
+
+    // Check if this is a renewal before activating
+    const isRenewal = await hasActiveSubscription(payment.telegram_id);
+
     const prices = await getPricesForUser(payment.telegram_id);
     const subscription = await activateSubscription({
       telegramId: payment.telegram_id,
@@ -71,13 +75,17 @@ async function handleAdminDecision(
         amount: payment.amount,
         currency: payment.currency,
         expiresAt: subscription.expires_at,
+        isRenewal,
       });
       await bot.telegram.sendMessage(payment.telegram_id, successText);
     } catch (err) {
       logger.error('Failed to send USDT approval to user', err);
     }
 
-    await sendRulesOrInvite(bot, payment.telegram_id);
+    // Send rules or invite link only for new subscriptions
+    if (!isRenewal) {
+      await sendRulesOrInvite(bot, payment.telegram_id);
+    }
 
     // Process partner commission
     await processPartnerCommission(bot, {

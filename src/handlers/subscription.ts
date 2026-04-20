@@ -2,10 +2,14 @@ import { Telegraf, type Context } from 'telegraf';
 import { buildTariffKeyboard, paymentMethodKeyboard } from '../keyboards/index.js';
 import { TEXTS } from '../texts/index.js';
 import { getPricesForUser } from '../services/pricing.js';
-import { createTransaction, hasPendingCardTransaction, updateTransactionStatus } from '../db/transactions.js';
-import { hasActiveSubscription, getCancelledSubscription } from '../db/subscriptions.js';
-import { formatDate, planDisplayName } from '../services/notifications.js';
-import { createInvoice, removeInvoice } from '../services/wayforpay.js';
+import { createTransaction, hasPendingCardTransaction, updateTransactionStatus, updateTransactionCard, updateTransactionDeclineReason } from '../db/transactions.js';
+import { hasActiveSubscription, getCancelledSubscription, activateSubscription, type Subscription } from '../db/subscriptions.js';
+import { formatDate, planDisplayName, buildPaymentSuccessMessage, buildRetryFailedMessage } from '../services/notifications.js';
+import { sendPaymentNotification } from '../services/notifications.js';
+import { getUserByTelegramId } from '../db/users.js';
+import { processPartnerCommission } from '../services/partner.js';
+import { daysFromPlanKey } from '../services/pricing.js';
+import { createInvoice, removeInvoice, chargeWithToken } from '../services/wayforpay.js';
 import { logger } from '../utils/logger.js';
 import { generateOrderReference } from '../utils/order-reference.js';
 import { savePaymentMessage, deletePaymentMessage } from '../utils/payment-messages.js';
@@ -217,6 +221,132 @@ export function registerSubscriptionHandler(bot: Telegraf) {
         ],
       },
     });
+  });
+
+  // Retry charge — manual retry after failed auto-renewal
+  bot.action(/^retry_charge:(\d+)$/, async (ctx) => {
+    await ctx.answerCbQuery();
+    const subscriptionId = Number(ctx.match[1]);
+    const telegramId = ctx.from.id;
+
+    // Fetch subscription — must belong to the calling user
+    const { db } = await import('../db/index.js');
+    const subResult = await db.query(
+      `SELECT * FROM subscriptions WHERE id = $1 AND telegram_id = $2 AND status = 'Active' AND rec_token IS NOT NULL`,
+      [subscriptionId, telegramId],
+    );
+    const sub = subResult.rows[0] as Subscription | undefined;
+
+    if (!sub || !sub.rec_token || !sub.prices) {
+      await ctx.editMessageText('\u{26A0}\u{FE0F} Підписку не знайдено або картка не збережена.');
+      return;
+    }
+
+    const prices = sub.prices as Record<string, { amount: number; currency: string; days: number; display_name?: string }>;
+    const planPrice = prices[sub.plan];
+    if (!planPrice) {
+      await ctx.editMessageText('\u{26A0}\u{FE0F} Не вдалося визначити тариф.');
+      return;
+    }
+
+    // Prevent double-charge: check if there's a recent successful or pending charge for this subscription
+    const recentCharge = await db.query(
+      `SELECT 1 FROM transactions
+       WHERE telegram_id = $1 AND method = 'card' AND status IN ('Approved', 'Pending')
+         AND created_at > NOW() - INTERVAL '5 minutes'
+       LIMIT 1`,
+      [telegramId],
+    );
+    if (recentCharge.rows.length > 0) {
+      await ctx.editMessageText('\u{26A0}\u{FE0F} Оплата вже обробляється. Зачекай кілька хвилин.');
+      return;
+    }
+
+    // Show "processing" state
+    await ctx.editMessageText('\u{23F3} Обробка оплати...');
+
+    const orderRef = generateOrderReference(sub.telegram_id, 'retry');
+    const tx = await createTransaction({
+      telegramId: sub.telegram_id,
+      amount: planPrice.amount,
+      currency: planPrice.currency,
+      method: 'card',
+      plan: sub.plan,
+      orderReference: orderRef,
+    });
+
+    const result = await chargeWithToken({
+      orderReference: orderRef,
+      amount: planPrice.amount,
+      currency: planPrice.currency,
+      productName: planPrice.display_name ?? sub.plan,
+      recToken: sub.rec_token,
+    });
+
+    if (result.success) {
+      await updateTransactionStatus(orderRef, 'Approved');
+      await updateTransactionCard(orderRef, sub.rec_token, sub.card_pan);
+
+      const subscription = await activateSubscription({
+        telegramId: sub.telegram_id,
+        plan: sub.plan,
+        method: 'card',
+        days: planPrice.days,
+        transactionId: tx.id,
+        prices,
+        cardPan: sub.card_pan,
+        recToken: sub.rec_token,
+      });
+
+      const successText = buildPaymentSuccessMessage({
+        plan: sub.plan,
+        amount: planPrice.amount,
+        currency: planPrice.currency,
+        expiresAt: subscription.expires_at,
+        isRenewal: true,
+      });
+
+      await ctx.editMessageText(successText);
+
+      // Admin notification
+      const user = await getUserByTelegramId(sub.telegram_id);
+      await sendPaymentNotification(bot, {
+        subscriptionId: subscription.id,
+        transactionId: tx.id,
+        userId: user?.id ?? 0,
+        telegramId: sub.telegram_id,
+        username: user?.username ?? null,
+        plan: sub.plan,
+        amount: planPrice.amount,
+        currency: planPrice.currency,
+        orderReference: orderRef,
+        method: 'card',
+      });
+
+      // Partner commission
+      await processPartnerCommission(bot, {
+        referredTelegramId: sub.telegram_id,
+        transactionId: tx.id,
+        paymentAmount: planPrice.amount,
+        paymentCurrency: planPrice.currency,
+      });
+
+      logger.info('Retry charge: success', { telegramId: sub.telegram_id, orderRef });
+    } else {
+      await updateTransactionStatus(orderRef, 'Declined');
+      await updateTransactionDeclineReason(orderRef, result.reason ?? null, result.reasonCode ?? null);
+
+      const failedText = buildRetryFailedMessage({
+        plan: sub.plan,
+        amount: planPrice.amount,
+        currency: planPrice.currency,
+        cardPan: sub.card_pan,
+      });
+
+      await ctx.editMessageText(failedText);
+
+      logger.warn('Retry charge: failed', { telegramId: sub.telegram_id, orderRef, reason: result.reason });
+    }
   });
 
   // Note: BTN_HOME handler is in navigation.ts

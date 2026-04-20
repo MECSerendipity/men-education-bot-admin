@@ -1,8 +1,11 @@
 import { Telegraf } from 'telegraf';
-import { runCardChargeJob, runCryptoReminderJob } from './charge.js';
+import { runCardChargeJob } from './charge.js';
 import { runExpireJob } from './expire.js';
 import { logger } from '../utils/logger.js';
 import { runCleanupJob } from './cleanup.js';
+import { runCryptoRenewalReminder } from './crypto-reminder.js';
+import { runTestCardCharge } from './card-charge-test.js';
+import { runTestExpireJob } from './expire-test.js';
 
 /** Job schedule definition */
 interface ScheduledJob {
@@ -14,8 +17,8 @@ interface ScheduledJob {
 /** All scheduled jobs — times in UTC */
 const JOBS: ScheduledJob[] = [
   { name: 'expire',   utcHour: 7,  run: runExpireJob },
-  { name: 'charge-1', utcHour: 9,  run: async (bot) => { await runCardChargeJob(bot); await runCryptoReminderJob(bot); } },
-  { name: 'charge-2', utcHour: 15, run: async (bot) => { await runCardChargeJob(bot); await runCryptoReminderJob(bot); } },
+  { name: 'charge-1', utcHour: 9,  run: async (bot) => { await runCardChargeJob(bot); } },
+  { name: 'charge-2', utcHour: 15, run: async (bot) => { await runCardChargeJob(bot); } },
   { name: 'cleanup',  utcHour: 3,  run: async () => { await runCleanupJob(); } },
 ];
 
@@ -66,6 +69,25 @@ export function startScheduler(bot: Telegraf): void {
   }, 60 * 1000);
   interval.unref();
 
+  // TODO: TESTING MODE — crypto reminder + card charge every 1 min. Remove before production.
+  const cryptoReminderInterval = setInterval(() => {
+    runCryptoRenewalReminder(bot).catch((err) => logger.error('Crypto reminder tick failed', err));
+  }, 60 * 1000);
+  cryptoReminderInterval.unref();
+
+  const testCardChargeInterval = setInterval(() => {
+    runTestCardCharge(bot).catch((err) => logger.error('Test card charge tick failed', err));
+  }, 60 * 1000);
+  testCardChargeInterval.unref();
+
+  const testExpireInterval = setInterval(() => {
+    runTestExpireJob(bot).catch((err) => logger.error('Test expire tick failed', err));
+  }, 30 * 1000);
+  testExpireInterval.unref();
+
   // Run immediately on startup to catch any missed jobs
   tick(bot).catch((err) => logger.error('Scheduler initial tick failed', err));
+  runCryptoRenewalReminder(bot).catch((err) => logger.error('Crypto reminder initial tick failed', err));
+  runTestCardCharge(bot).catch((err) => logger.error('Test card charge initial tick failed', err));
+  runTestExpireJob(bot).catch((err) => logger.error('Test expire initial tick failed', err));
 }

@@ -9,12 +9,12 @@ import { escapeHtml } from '../utils/html.js';
 import { USDT, PARTNER } from '../config.js';
 
 /**
- * Expire overdue subscriptions and kick users from channels.
- *
- * - Active  + expires_at::date < today  → status = Expired + kick
- * - Cancelled + expires_at::date < today → status stays Cancelled + kick
+ * TODO: TESTING MODE — runs every 30 sec via scheduler.
+ * Remove before deploying to production.
  */
-export async function runExpireJob(bot: Telegraf): Promise<void> {
+
+/** Test expire job — same logic as production expire but runs every 30 seconds */
+export async function runTestExpireJob(bot: Telegraf): Promise<void> {
   // Step 1: Move Active → Expired (only unrevoked)
   const expiredResult = await db.query(
     `WITH expired AS (
@@ -56,7 +56,6 @@ export async function runExpireJob(bot: Telegraf): Promise<void> {
 
   const cancelledUsers: number[] = cancelledResult.rows.map((r: { telegram_id: number }) => r.telegram_id);
 
-  // Update is_subscribed for cancelled users
   if (cancelledUsers.length > 0) {
     await db.query(
       `UPDATE users SET is_subscribed = FALSE, updated_at = NOW()
@@ -69,24 +68,22 @@ export async function runExpireJob(bot: Telegraf): Promise<void> {
 
   if (allUsersToKick.length === 0) return;
 
-  logger.info(`Expire job: processing ${expiredUsers.length} expired + ${cancelledUsers.length} cancelled subscription(s)`);
+  logger.info(`Test expire: processing ${expiredUsers.length} expired + ${cancelledUsers.length} cancelled`);
 
   for (const telegramId of allUsersToKick) {
     try {
       await revokeAccessForUser(bot, telegramId);
-      logger.info('Expire job: revoked access', { telegramId });
+      logger.info('Test expire: revoked access', { telegramId });
     } catch (err) {
-      logger.error('Expire job: failed to revoke access', { telegramId, err });
+      logger.error('Test expire: failed to revoke access', { telegramId, err });
     }
 
-    // Break partner commission chain — this user can no longer generate commissions
     try {
       await churnReferral(telegramId);
     } catch (err) {
-      logger.error('Expire job: failed to churn referral', { telegramId, err });
+      logger.error('Test expire: failed to churn referral', { telegramId, err });
     }
 
-    // Notify user
     try {
       await bot.telegram.sendMessage(
         telegramId,
@@ -101,7 +98,7 @@ export async function runExpireJob(bot: Telegraf): Promise<void> {
         },
       );
     } catch (err) {
-      logger.error('Expire job: failed to notify user', err);
+      logger.error('Test expire: failed to notify user', err);
     }
 
     // Notify admin channel (thread 42) about churn
@@ -111,7 +108,6 @@ export async function runExpireJob(bot: Telegraf): Promise<void> {
         const usernameDisplay = user?.username ? `@${escapeHtml(user.username)}` : 'немає';
         const reason = cancelledUsers.includes(telegramId) ? 'Cancelled' : 'Expired';
 
-        // Get subscription details
         const subResult = await db.query(
           `SELECT id, plan, method FROM subscriptions
            WHERE telegram_id = $1 AND status IN ('Expired', 'Cancelled')
@@ -137,7 +133,7 @@ export async function runExpireJob(bot: Telegraf): Promise<void> {
         );
       }
     } catch (err) {
-      logger.error('Expire job: failed to send churn notification', err);
+      logger.error('Test expire: failed to send churn notification', err);
     }
   }
 }
