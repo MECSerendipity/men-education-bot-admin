@@ -8,7 +8,7 @@ import { logger } from '../utils/logger.js';
  *
  * Logic:
  * 1. Check if the paying user was referred (exists in referrals table)
- * 2. If referral is churned — do nothing (chain is broken forever)
+ * 2. If referral is inactive — do nothing (chain is broken forever)
  * 3. If referral is 'clicked' — this is first payment → first commission (77%)
  * 4. If referral is 'active' — this is recurring → recurring commission (10%)
  * 5. Check if the corresponding toggle is enabled in partner_config
@@ -25,7 +25,7 @@ export async function processPartnerCommission(bot: Telegraf, params: {
     const referral = await getReferralByReferredId(params.referredTelegramId);
     if (!referral) return; // Not a referred user
 
-    if (referral.status === 'churned') return; // Chain broken
+    if (referral.status === 'inactive') return; // Chain broken
 
     const config = await getPartnerConfig();
 
@@ -33,16 +33,14 @@ export async function processPartnerCommission(bot: Telegraf, params: {
     let percentage: number;
 
     if (referral.status === 'clicked') {
-      // First payment — activate the referral and grant first commission
+      // First payment — always activate the referral, commission depends on config
+      await activateReferral(params.referredTelegramId);
       if (!config.first_enabled) return;
       type = 'earning_first';
       percentage = config.first_percent;
-      await activateReferral(params.referredTelegramId);
     } else if (referral.status === 'active') {
-      // Recurring payment
+      // Recurring payment — independent from first commission toggle
       if (!config.recurring_enabled) return;
-      // If first commission is disabled, recurring is also disabled
-      if (!config.first_enabled) return;
       type = 'earning_recurring';
       percentage = config.recurring_percent;
     } else {

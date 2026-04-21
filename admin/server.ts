@@ -180,7 +180,7 @@ app.get<{
       // Fetch page with subscription data via LEFT JOIN
       const dataResult = await dbPool.query(
         `SELECT u.id, u.telegram_id, u.username, u.first_name, u.last_name, u.email,
-                u.is_subscribed, u.created_at,
+                u.is_subscribed, u.ref_code, u.created_at,
                 s.started_at AS subscribed_at, s.expires_at
          FROM users u
          LEFT JOIN subscriptions s ON s.telegram_id = u.telegram_id AND s.status = 'Active'
@@ -461,7 +461,7 @@ app.get<{
 
       const dataResult = await dbPool.query(
         `SELECT s.id, s.telegram_id, s.plan, s.method, s.status,
-                s.card_pan, s.started_at, s.expires_at, s.created_at,
+                s.card_pan, s.prices, s.started_at, s.expires_at, s.created_at,
                 u.username, u.first_name, u.last_name
          FROM subscriptions s
          LEFT JOIN users u ON u.telegram_id = s.telegram_id
@@ -589,7 +589,7 @@ app.get<{
 
       const dataResult = await dbPool.query(
         `SELECT t.id, t.telegram_id, t.amount, t.currency, t.method, t.plan,
-                t.status, t.order_reference, t.card_pan, t.tx_hash, t.decline_reason, t.created_at,
+                t.status, t.subscription_id, t.order_reference, t.card_pan, t.tx_hash, t.decline_reason, t.created_at,
                 u.username, u.first_name, u.last_name
          FROM transactions t
          LEFT JOIN users u ON u.telegram_id = t.telegram_id
@@ -1125,7 +1125,7 @@ app.get<{
            COUNT(*) AS total_all,
            COUNT(*) FILTER (WHERE r.status = 'clicked') AS total_clicked,
            COUNT(*) FILTER (WHERE r.status = 'active') AS total_active,
-           COUNT(*) FILTER (WHERE r.status = 'churned') AS total_churned
+           COUNT(*) FILTER (WHERE r.status = 'inactive') AS total_inactive
          FROM referrals r
          LEFT JOIN users u1 ON u1.telegram_id = r.referrer_id
          LEFT JOIN users u2 ON u2.telegram_id = r.referred_id
@@ -1136,7 +1136,7 @@ app.get<{
         all: Number(countsResult.rows[0].total_all),
         clicked: Number(countsResult.rows[0].total_clicked),
         active: Number(countsResult.rows[0].total_active),
-        churned: Number(countsResult.rows[0].total_churned),
+        inactive: Number(countsResult.rows[0].total_inactive),
       };
 
       const dataResult = await dbPool.query(
@@ -1189,6 +1189,10 @@ app.get<{
 
       if (filter === 'earnings') {
         conditions.push(`pt.type LIKE 'earning_%'`);
+      } else if (filter === 'earning_first') {
+        conditions.push(`pt.type = 'earning_first'`);
+      } else if (filter === 'earning_recurring') {
+        conditions.push(`pt.type = 'earning_recurring'`);
       } else if (filter === 'withdrawals') {
         conditions.push(`pt.type = 'withdrawal'`);
       } else if (filter === 'pending') {
@@ -1259,7 +1263,7 @@ app.get<{
 
       const countResult = await dbPool.query(
         `SELECT COUNT(*) FROM users u
-         LEFT JOIN partner_balances pb ON pb.telegram_id = u.telegram_id
+         LEFT JOIN partner_accounts pb ON pb.telegram_id = u.telegram_id
          ${where}`,
         params,
       );
@@ -1269,9 +1273,13 @@ app.get<{
         `SELECT u.id, u.telegram_id, u.username, u.first_name, u.ref_code,
                 COALESCE(pb.balance_uah, 0) AS partner_balance_uah,
                 COALESCE(pb.balance_usdt, 0) AS partner_balance_usdt,
-                (SELECT COUNT(*) FROM referrals r WHERE r.referrer_id = u.telegram_id) AS referral_count
+                (SELECT COUNT(*) FROM referrals r WHERE r.referrer_id = u.telegram_id) AS referral_count,
+                COALESCE((SELECT SUM(amount) FROM partner_transactions pt WHERE pt.partner_id = u.telegram_id AND pt.type = 'withdrawal' AND pt.status = 'approved' AND pt.currency = 'UAH'), 0) AS withdrawn_uah,
+                COALESCE((SELECT SUM(amount) FROM partner_transactions pt WHERE pt.partner_id = u.telegram_id AND pt.type = 'withdrawal' AND pt.status = 'approved' AND pt.currency = 'USDT'), 0) AS withdrawn_usdt,
+                COALESCE((SELECT SUM(amount) FROM partner_transactions pt WHERE pt.partner_id = u.telegram_id AND pt.type LIKE 'earning_%' AND pt.status = 'completed' AND pt.currency = 'UAH'), 0) AS total_earned_uah,
+                COALESCE((SELECT SUM(amount) FROM partner_transactions pt WHERE pt.partner_id = u.telegram_id AND pt.type LIKE 'earning_%' AND pt.status = 'completed' AND pt.currency = 'USDT'), 0) AS total_earned_usdt
          FROM users u
-         LEFT JOIN partner_balances pb ON pb.telegram_id = u.telegram_id
+         LEFT JOIN partner_accounts pb ON pb.telegram_id = u.telegram_id
          ${where}
          ORDER BY COALESCE(pb.balance_uah, 0) + COALESCE(pb.balance_usdt, 0) DESC
          LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,

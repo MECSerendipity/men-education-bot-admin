@@ -3,10 +3,11 @@ import { db } from '../db/index.js';
 import { revokeAccessForUser } from '../services/invite.js';
 import { logSubscriptionEvent } from '../db/subscription-events.js';
 import { logger } from '../utils/logger.js';
-import { churnReferral } from '../db/partners.js';
+import { deactivateReferral } from '../db/partners.js';
 import { getUserByTelegramId } from '../db/users.js';
 import { escapeHtml } from '../utils/html.js';
 import { USDT, PARTNER } from '../config.js';
+import { refreshMenuKeyboard } from '../keyboards/index.js';
 
 /**
  * TODO: TESTING MODE — runs every 30 sec via scheduler.
@@ -79,9 +80,9 @@ export async function runTestExpireJob(bot: Telegraf): Promise<void> {
     }
 
     try {
-      await churnReferral(telegramId);
+      await deactivateReferral(telegramId);
     } catch (err) {
-      logger.error('Test expire: failed to churn referral', { telegramId, err });
+      logger.error('Test expire: failed to deactivate referral', { telegramId, err });
     }
 
     try {
@@ -97,6 +98,7 @@ export async function runTestExpireJob(bot: Telegraf): Promise<void> {
           },
         },
       );
+      await refreshMenuKeyboard(bot, telegramId, false);
     } catch (err) {
       logger.error('Test expire: failed to notify user', err);
     }
@@ -125,10 +127,10 @@ export async function runTestExpireJob(bot: Telegraf): Promise<void> {
           `▸ Chat: <a href="tg://user?id=${telegramId}">Написати юзеру</a>\n` +
           (sub ? `▸ Subscription ID: <code>${sub.id}</code>\n` : '') +
           `▸ Status: ${reason}\n\n` +
-          `#churn`,
+          `#inactive`,
           {
             parse_mode: 'HTML',
-            message_thread_id: Number(PARTNER.churnThreadId) || undefined,
+            message_thread_id: Number(PARTNER.inactiveThreadId) || undefined,
           },
         );
       }

@@ -1,3 +1,4 @@
+import { Telegraf } from 'telegraf';
 import { TEXTS } from '../texts/index.js';
 import type { PricesSnapshot } from '../services/pricing.js';
 
@@ -46,6 +47,17 @@ export function paymentMethodKeyboard(duration: string) {
       [{ text: TEXTS.BTN_BACK_TARIFFS, callback_data: 'back:tariffs' }],
     ],
   };
+}
+
+/** Send updated main menu keyboard to user (call after subscription status changes) */
+export async function refreshMenuKeyboard(bot: Telegraf, telegramId: number, isSubscribed: boolean): Promise<void> {
+  try {
+    await bot.telegram.sendMessage(
+      telegramId,
+      TEXTS.MAIN_MENU,
+      { reply_markup: buildMainMenuKeyboard(isSubscribed) },
+    );
+  } catch { /* ignore — user may have blocked bot */ }
 }
 
 /** Back button keyboard for sub-sections */

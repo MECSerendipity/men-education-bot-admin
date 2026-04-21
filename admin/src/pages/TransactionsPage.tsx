@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { formatDateTime } from '../utils/format';
+import { formatDate, formatDateTime } from '../utils/format';
 import { SearchIcon } from '../components/Icons';
 import { Pagination } from '../components/Pagination';
 import { InfoTooltip } from '../components/Tooltip';
@@ -14,6 +14,7 @@ interface Transaction {
   method: string;
   plan: string;
   status: string;
+  subscription_id: number | null;
   order_reference: string;
   card_pan: string | null;
   tx_hash: string | null;
@@ -165,13 +166,14 @@ export function TransactionsPage() {
               <thead className="bg-gray-50 text-gray-600 text-left">
                 <tr>
                   <th className="px-4 py-3 font-medium">ID</th>
+                  <th className="px-4 py-3 font-medium">Sub ID</th>
                   <th className="px-4 py-3 font-medium">User</th>
                   <th className="px-4 py-3 font-medium">Amount</th>
-                  <th className="px-4 py-3 font-medium">Method</th>
                   <th className="px-4 py-3 font-medium">Plan</th>
+                  <th className="px-4 py-3 font-medium">Method</th>
                   <th className="px-4 py-3 font-medium">Status</th>
+                  <th className="px-4 py-3 font-medium">Created</th>
                   <th className="px-4 py-3 font-medium">Details</th>
-                  <th className="px-4 py-3 font-medium">Date</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -187,19 +189,13 @@ export function TransactionsPage() {
                   return (
                     <tr key={tx.id} className="hover:bg-gray-50 transition-colors">
                       <td className="px-4 py-3 font-mono text-gray-400">{tx.id}</td>
+                      <td className="px-4 py-3 font-mono text-gray-400">{tx.subscription_id ?? '—'}</td>
                       <td className="px-4 py-3 text-gray-700">
                         <div>{userName}</div>
-                        <div className="text-xs text-gray-400 font-mono">{tx.telegram_id}</div>
+                        <div className="text-xs text-gray-400 font-mono">TG_ID: {tx.telegram_id}</div>
                       </td>
                       <td className="px-4 py-3 text-gray-700 font-medium">
                         {tx.amount} {tx.currency}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                          METHOD_STYLES[tx.method] ?? 'bg-gray-100 text-gray-500'
-                        }`}>
-                          {tx.method}
-                        </span>
                       </td>
                       <td className="px-4 py-3 text-gray-500 text-xs">
                         {tx.plan === 'card_change' ? (
@@ -214,15 +210,22 @@ export function TransactionsPage() {
                       </td>
                       <td className="px-4 py-3">
                         <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                          METHOD_STYLES[tx.method] ?? 'bg-gray-100 text-gray-500'
+                        }`}>
+                          {tx.method}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
                           STATUS_STYLES[tx.status] ?? 'bg-gray-100 text-gray-500'
                         }`}>
                           {STATUS_LABELS[tx.status] ?? tx.status}
                         </span>
                       </td>
+                      <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">{formatDate(tx.created_at)}</td>
                       <td className="px-4 py-3 text-gray-500 text-xs font-mono max-w-[160px] truncate" title={tx.tx_hash ?? tx.card_pan ?? ''}>
                         {detail}
                       </td>
-                      <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">{formatDateTime(tx.created_at)}</td>
                     </tr>
                   );
                 })}

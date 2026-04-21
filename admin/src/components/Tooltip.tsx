@@ -1,23 +1,37 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 
 interface TooltipProps {
-  content: string;
+  content: React.ReactNode;
   children: React.ReactNode;
 }
 
 export function Tooltip({ content, children }: TooltipProps) {
   const [visible, setVisible] = useState(false);
-  const tooltipRef = useRef<HTMLDivElement>(null);
+  const [coords, setCoords] = useState({ top: 0, left: 0 });
   const triggerRef = useRef<HTMLDivElement>(null);
+
+  const updatePosition = useCallback(() => {
+    if (!triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    setCoords({
+      top: rect.top - 8,
+      left: rect.left + rect.width / 2,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!visible) return;
+    updatePosition();
+    const hide = () => setVisible(false);
+    window.addEventListener('scroll', hide, true);
+    return () => window.removeEventListener('scroll', hide, true);
+  }, [visible, updatePosition]);
 
   // Close on click outside
   useEffect(() => {
     if (!visible) return;
     function handleClick(e: MouseEvent) {
-      if (
-        tooltipRef.current && !tooltipRef.current.contains(e.target as Node) &&
-        triggerRef.current && !triggerRef.current.contains(e.target as Node)
-      ) {
+      if (triggerRef.current && !triggerRef.current.contains(e.target as Node)) {
         setVisible(false);
       }
     }
@@ -38,10 +52,10 @@ export function Tooltip({ content, children }: TooltipProps) {
 
       {visible && (
         <div
-          ref={tooltipRef}
-          className="absolute z-50 bottom-full left-1/2 -translate-x-1/2 mb-2 w-64
+          className="fixed z-[9999] -translate-x-1/2 -translate-y-full min-w-[200px] max-w-[320px]
                      bg-gray-900 text-white text-xs leading-relaxed rounded-lg px-3 py-2.5
-                     shadow-lg pointer-events-auto"
+                     shadow-lg pointer-events-none"
+          style={{ top: coords.top, left: coords.left }}
         >
           {content}
           {/* Arrow */}

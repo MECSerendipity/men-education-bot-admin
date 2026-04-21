@@ -3,10 +3,11 @@ import { db } from '../db/index.js';
 import { revokeAccessForUser } from '../services/invite.js';
 import { logSubscriptionEvent } from '../db/subscription-events.js';
 import { logger } from '../utils/logger.js';
-import { churnReferral } from '../db/partners.js';
+import { deactivateReferral } from '../db/partners.js';
 import { getUserByTelegramId } from '../db/users.js';
 import { escapeHtml } from '../utils/html.js';
 import { USDT, PARTNER } from '../config.js';
+import { refreshMenuKeyboard } from '../keyboards/index.js';
 
 /**
  * Expire overdue subscriptions and kick users from channels.
@@ -81,12 +82,12 @@ export async function runExpireJob(bot: Telegraf): Promise<void> {
 
     // Break partner commission chain — this user can no longer generate commissions
     try {
-      await churnReferral(telegramId);
+      await deactivateReferral(telegramId);
     } catch (err) {
-      logger.error('Expire job: failed to churn referral', { telegramId, err });
+      logger.error('Expire job: failed to deactivate referral', { telegramId, err });
     }
 
-    // Notify user
+    // Notify user and refresh keyboard (remove partner button)
     try {
       await bot.telegram.sendMessage(
         telegramId,
@@ -100,6 +101,7 @@ export async function runExpireJob(bot: Telegraf): Promise<void> {
           },
         },
       );
+      await refreshMenuKeyboard(bot, telegramId, false);
     } catch (err) {
       logger.error('Expire job: failed to notify user', err);
     }
@@ -129,10 +131,10 @@ export async function runExpireJob(bot: Telegraf): Promise<void> {
           `▸ Chat: <a href="tg://user?id=${telegramId}">Написати юзеру</a>\n` +
           (sub ? `▸ Subscription ID: <code>${sub.id}</code>\n` : '') +
           `▸ Status: ${reason}\n\n` +
-          `#churn`,
+          `#inactive`,
           {
             parse_mode: 'HTML',
-            message_thread_id: Number(PARTNER.churnThreadId) || undefined,
+            message_thread_id: Number(PARTNER.inactiveThreadId) || undefined,
           },
         );
       }

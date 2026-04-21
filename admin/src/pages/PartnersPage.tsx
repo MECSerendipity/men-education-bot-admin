@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { formatDateTime } from '../utils/format';
+import { formatDate } from '../utils/format';
 import { SearchIcon } from '../components/Icons';
 import { Pagination } from '../components/Pagination';
 import { InfoTooltip } from '../components/Tooltip';
@@ -16,7 +16,7 @@ interface Referral {
   status: string;
   created_at: string;
   activated_at: string | null;
-  churned_at: string | null;
+  inactive_at: string | null;
   referrer_username: string | null;
   referrer_first_name: string | null;
   referred_username: string | null;
@@ -50,6 +50,10 @@ interface Partner {
   partner_balance_uah: number;
   partner_balance_usdt: number;
   referral_count: number;
+  withdrawn_uah: number;
+  withdrawn_usdt: number;
+  total_earned_uah: number;
+  total_earned_usdt: number;
 }
 
 interface PartnerConfig {
@@ -72,7 +76,7 @@ function displayName(username: string | null, firstName: string | null, id?: num
 const STATUS_STYLES: Record<string, string> = {
   clicked: 'bg-yellow-100 text-yellow-700',
   active: 'bg-green-100 text-green-700',
-  churned: 'bg-red-100 text-red-700',
+  inactive: 'bg-red-100 text-red-700',
   completed: 'bg-green-100 text-green-700',
   pending: 'bg-yellow-100 text-yellow-700',
   approved: 'bg-green-100 text-green-700',
@@ -80,16 +84,22 @@ const STATUS_STYLES: Record<string, string> = {
 };
 
 const REFERRAL_FILTER_TOOLTIPS: Record<string, string> = {
-  clicked: 'Юзер перейшов за посиланням, але ще не оплатив підписку.',
-  active: 'Юзер оплатив підписку. Партнер отримує комісію з кожної оплати.',
-  churned: 'Юзера кікнули з клубу. Ланцюг комісій розірвано назавжди.',
+  clicked: 'Referred перейшов за посиланням, ще не оплатив. Комісії немає.',
+  active: 'Referred оплатив. Referrer отримує комісію з кожної оплати.',
+  inactive: 'Referred покинув клуб. Referrer більше не отримує комісію, навіть якщо Referred повернеться.',
+};
+
+/** Display labels for referral statuses (DB stores 'inactive', UI shows 'Inactive') */
+const REFERRAL_STATUS_LABELS: Record<string, string> = {
+  clicked: 'Clicked',
+  active: 'Active',
+  inactive: 'Inactive',
 };
 
 const TX_FILTER_TOOLTIPS: Record<string, string> = {
-  earnings: 'Нарахування комісій партнерам (перша оплата + автопродовження).',
-  withdrawals: 'Всі запити на виведення коштів (pending + approved + rejected).',
-  pending: 'Запити на виведення, що очікують підтвердження адміна.',
-  rejected: 'Запити на виведення, відхилені адміном.',
+  earning_first: 'Комісія з першої оплати реферала. Нараховується одноразово коли реферал вперше оплачує підписку.',
+  earning_recurring: 'Комісія з автопродовження реферала. Нараховується кожного разу коли реферал продовжує підписку.',
+  withdrawals: 'Запити на виведення коштів партнером (pending, approved, rejected).',
 };
 
 /* ─── Referrals Tab ─── */
@@ -101,7 +111,7 @@ function ReferralsTab() {
   const [totalPages, setTotalPages] = useState(1);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
-  const [counts, setCounts] = useState({ all: 0, clicked: 0, active: 0, churned: 0 });
+  const [counts, setCounts] = useState({ all: 0, clicked: 0, active: 0, inactive: 0 });
   const [loading, setLoading] = useState(true);
   const { headers } = useAuth();
 
@@ -123,12 +133,12 @@ function ReferralsTab() {
   useEffect(() => { fetchData(); }, [fetchData]);
   useEffect(() => { setPage(1); }, [search, filter]);
 
-  type ReferralFilter = 'all' | 'clicked' | 'active' | 'churned';
+  type ReferralFilter = 'all' | 'clicked' | 'active' | 'inactive';
   const filterButtons: { key: ReferralFilter; label: string }[] = [
     { key: 'all', label: `All (${counts.all})` },
     { key: 'clicked', label: `Clicked (${counts.clicked})` },
     { key: 'active', label: `Active (${counts.active})` },
-    { key: 'churned', label: `Churned (${counts.churned})` },
+    { key: 'inactive', label: `Inactive (${counts.inactive})` },
   ];
 
   return (
@@ -173,27 +183,35 @@ function ReferralsTab() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-gray-600 text-left">
                 <tr>
+                  <th className="px-4 py-3 font-medium">ID</th>
                   <th className="px-4 py-3 font-medium">Referrer</th>
                   <th className="px-4 py-3 font-medium">Referred</th>
                   <th className="px-4 py-3 font-medium">Status</th>
                   <th className="px-4 py-3 font-medium">Clicked</th>
                   <th className="px-4 py-3 font-medium">Activated</th>
-                  <th className="px-4 py-3 font-medium">Churned</th>
+                  <th className="px-4 py-3 font-medium">Inactive</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {referrals.map(r => (
                   <tr key={r.id} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-4 py-3 text-gray-700">{displayName(r.referrer_username, r.referrer_first_name, r.referrer_id)}</td>
-                    <td className="px-4 py-3 text-gray-700">{displayName(r.referred_username, r.referred_first_name, r.referred_id)}</td>
+                    <td className="px-4 py-3 font-mono text-gray-400">{r.id}</td>
+                    <td className="px-4 py-3 text-gray-700">
+                      <div>{displayName(r.referrer_username, r.referrer_first_name, r.referrer_id)}</div>
+                      <div className="text-xs text-gray-400 font-mono">TG_ID: {r.referrer_id}</div>
+                    </td>
+                    <td className="px-4 py-3 text-gray-700">
+                      <div>{displayName(r.referred_username, r.referred_first_name, r.referred_id)}</div>
+                      <div className="text-xs text-gray-400 font-mono">TG_ID: {r.referred_id}</div>
+                    </td>
                     <td className="px-4 py-3">
                       <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_STYLES[r.status] ?? 'bg-gray-100 text-gray-500'}`}>
-                        {r.status}
+                        {REFERRAL_STATUS_LABELS[r.status] ?? r.status}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-gray-500">{formatDateTime(r.created_at)}</td>
-                    <td className="px-4 py-3 text-gray-500">{formatDateTime(r.activated_at)}</td>
-                    <td className="px-4 py-3 text-gray-500">{formatDateTime(r.churned_at)}</td>
+                    <td className="px-4 py-3 text-gray-500">{formatDate(r.created_at)}</td>
+                    <td className="px-4 py-3 text-gray-500">{formatDate(r.activated_at)}</td>
+                    <td className="px-4 py-3 text-gray-500">{formatDate(r.inactive_at)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -239,18 +257,17 @@ function TransactionsTab() {
   useEffect(() => { setPage(1); }, [search, filter]);
 
   const TYPE_LABELS: Record<string, string> = {
-    earning_first: 'First commission',
-    earning_recurring: 'Recurring',
+    earning_first: 'First payment',
+    earning_recurring: 'Auto-renewal',
     withdrawal: 'Withdrawal',
   };
 
-  type TxFilter = 'all' | 'earnings' | 'withdrawals' | 'pending' | 'rejected';
+  type TxFilter = 'all' | 'earning_first' | 'earning_recurring' | 'withdrawals';
   const filterButtons: { key: TxFilter; label: string }[] = [
     { key: 'all', label: 'All' },
-    { key: 'earnings', label: 'Earnings' },
-    { key: 'withdrawals', label: 'Withdrawals' },
-    { key: 'pending', label: 'Pending' },
-    { key: 'rejected', label: 'Rejected' },
+    { key: 'earning_first', label: 'First payment' },
+    { key: 'earning_recurring', label: 'Auto-renewal' },
+    { key: 'withdrawals', label: 'Withdrawal' },
   ];
 
   return (
@@ -295,29 +312,43 @@ function TransactionsTab() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-gray-600 text-left">
                 <tr>
+                  <th className="px-4 py-3 font-medium">ID</th>
+                  <th className="px-4 py-3 font-medium">Transaction ID</th>
                   <th className="px-4 py-3 font-medium">Partner</th>
-                  <th className="px-4 py-3 font-medium">Type</th>
                   <th className="px-4 py-3 font-medium">Referred</th>
-                  <th className="px-4 py-3 font-medium text-right">Amount</th>
-                  <th className="px-4 py-3 font-medium text-right">%</th>
+                  <th className="px-4 py-3 font-medium">Amount</th>
+                  <th className="px-4 py-3 font-medium">%</th>
+                  <th className="px-4 py-3 font-medium">Type</th>
                   <th className="px-4 py-3 font-medium">Status</th>
-                  <th className="px-4 py-3 font-medium">Date</th>
+                  <th className="px-4 py-3 font-medium">Created</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {txs.map(tx => (
                   <tr key={tx.id} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-4 py-3 text-gray-700">{displayName(tx.partner_username, tx.partner_first_name, tx.partner_id)}</td>
+                    <td className="px-4 py-3 font-mono text-gray-400">{tx.id}</td>
+                    <td className="px-4 py-3 font-mono text-gray-400">{tx.transaction_id ?? '—'}</td>
+                    <td className="px-4 py-3 text-gray-700">
+                      <div>{displayName(tx.partner_username, tx.partner_first_name, tx.partner_id)}</div>
+                      <div className="text-xs text-gray-400 font-mono">TG_ID: {tx.partner_id}</div>
+                    </td>
+                    <td className="px-4 py-3 text-gray-700">
+                      {tx.referred_id ? (
+                        <>
+                          <div>{displayName(tx.referred_username, tx.referred_first_name, tx.referred_id)}</div>
+                          <div className="text-xs text-gray-400 font-mono">TG_ID: {tx.referred_id}</div>
+                        </>
+                      ) : '—'}
+                    </td>
+                    <td className="px-4 py-3 text-gray-700 font-medium">{Number(tx.amount).toFixed(2)} {tx.currency}</td>
+                    <td className="px-4 py-3 text-gray-500">{tx.percentage != null ? `${tx.percentage}%` : '—'}</td>
                     <td className="px-4 py-3 text-gray-700">{TYPE_LABELS[tx.type] ?? tx.type}</td>
-                    <td className="px-4 py-3 text-gray-700">{tx.referred_id ? displayName(tx.referred_username, tx.referred_first_name, tx.referred_id) : '-'}</td>
-                    <td className="px-4 py-3 text-right font-mono text-gray-700">{Number(tx.amount).toFixed(2)} {tx.currency}</td>
-                    <td className="px-4 py-3 text-right text-gray-500">{tx.percentage != null ? `${tx.percentage}%` : '-'}</td>
                     <td className="px-4 py-3">
                       <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_STYLES[tx.status] ?? 'bg-gray-100 text-gray-500'}`}>
-                        {tx.status}
+                        {tx.status.charAt(0).toUpperCase() + tx.status.slice(1)}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-gray-500">{formatDateTime(tx.created_at)}</td>
+                    <td className="px-4 py-3 text-gray-500">{formatDate(tx.created_at)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -386,25 +417,30 @@ function BalancesTab() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-gray-600 text-left">
                 <tr>
-                  <th className="px-4 py-3 font-medium">Telegram ID</th>
+                  <th className="px-4 py-3 font-medium">ID</th>
                   <th className="px-4 py-3 font-medium">Username</th>
-                  <th className="px-4 py-3 font-medium">Name</th>
-                  <th className="px-4 py-3 font-medium">Ref Code</th>
-                  <th className="px-4 py-3 font-medium text-right">Referrals</th>
-                  <th className="px-4 py-3 font-medium text-right">Balance UAH</th>
-                  <th className="px-4 py-3 font-medium text-right">Balance USDT</th>
+                  <th className="px-4 py-3 font-medium">Referrals</th>
+                  <th className="px-4 py-3 font-medium">Balance UAH</th>
+                  <th className="px-4 py-3 font-medium">Balance USDT</th>
+                  <th className="px-4 py-3 font-medium">Withdrawn UAH</th>
+                  <th className="px-4 py-3 font-medium">Withdrawn USDT</th>
+                  <th className="px-4 py-3 font-medium">Total Earned</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {partners.map(p => (
                   <tr key={p.id} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-4 py-3 font-mono text-gray-700">{p.telegram_id}</td>
-                    <td className="px-4 py-3 text-gray-700">{p.username ? `@${p.username}` : '-'}</td>
-                    <td className="px-4 py-3 text-gray-700">{p.first_name ?? '-'}</td>
-                    <td className="px-4 py-3 font-mono text-gray-400">{p.ref_code ?? '-'}</td>
-                    <td className="px-4 py-3 text-right text-gray-700">{p.referral_count}</td>
-                    <td className="px-4 py-3 text-right font-mono text-gray-700">{Number(p.partner_balance_uah).toFixed(2)}</td>
-                    <td className="px-4 py-3 text-right font-mono text-gray-700">{Number(p.partner_balance_usdt).toFixed(2)}</td>
+                    <td className="px-4 py-3 font-mono text-gray-400">{p.id}</td>
+                    <td className="px-4 py-3 text-gray-700">
+                      <div>{p.username ? `@${p.username}` : p.first_name ?? '—'}</div>
+                      <div className="text-xs text-gray-400 font-mono">TG_ID: {p.telegram_id}</div>
+                    </td>
+                    <td className="px-4 py-3 text-gray-700">{p.referral_count}</td>
+                    <td className="px-4 py-3 text-gray-700 font-medium">{Number(p.partner_balance_uah).toFixed(2)}</td>
+                    <td className="px-4 py-3 text-gray-700 font-medium">{Number(p.partner_balance_usdt).toFixed(2)}</td>
+                    <td className="px-4 py-3 text-gray-500">{Number(p.withdrawn_uah).toFixed(2)}</td>
+                    <td className="px-4 py-3 text-gray-500">{Number(p.withdrawn_usdt).toFixed(2)}</td>
+                    <td className="px-4 py-3 text-gray-700">{Number(p.total_earned_uah).toFixed(2)} UAH | {Number(p.total_earned_usdt).toFixed(2)} USDT</td>
                   </tr>
                 ))}
               </tbody>
@@ -549,19 +585,18 @@ function ConfigTab() {
               <Toggle enabled={firstEnabled}
                 onChange={() => setDraft({ ...draft, first_enabled: firstEnabled ? 'false' : 'true' })} />
             </div>
-            {firstEnabled && (
-              <div className="mt-3">
-                <div className="flex items-center gap-2">
-                  <input type="text" inputMode="numeric" value={draft.first_percent}
-                    onChange={e => handleNumericInput('first_percent', e.target.value)}
-                    className={inputClass('first_percent')} />
-                  <span className="text-sm text-gray-500">%</span>
-                </div>
-                {errors.first_percent && (
-                  <p className="text-xs text-red-500 mt-1">{errors.first_percent}</p>
-                )}
+            <div className={`mt-3 ${!firstEnabled ? 'opacity-50' : ''}`}>
+              <div className="flex items-center gap-2">
+                <input type="text" inputMode="numeric" value={draft.first_percent}
+                  disabled={!firstEnabled}
+                  onChange={e => handleNumericInput('first_percent', e.target.value)}
+                  className={inputClass('first_percent')} />
+                <span className="text-sm text-gray-500">%</span>
               </div>
-            )}
+              {errors.first_percent && (
+                <p className="text-xs text-red-500 mt-1">{errors.first_percent}</p>
+              )}
+            </div>
           </div>
 
           <hr className="border-gray-100" />
@@ -576,45 +611,41 @@ function ConfigTab() {
               <Toggle enabled={recurringEnabled}
                 onChange={() => setDraft({ ...draft, recurring_enabled: recurringEnabled ? 'false' : 'true' })} />
             </div>
-            {recurringEnabled && (
-              <div className="mt-3">
-                <div className="flex items-center gap-2">
-                  <input type="text" inputMode="numeric" value={draft.recurring_percent}
-                    onChange={e => handleNumericInput('recurring_percent', e.target.value)}
-                    className={inputClass('recurring_percent')} />
-                  <span className="text-sm text-gray-500">%</span>
-                </div>
-                {errors.recurring_percent && (
-                  <p className="text-xs text-red-500 mt-1">{errors.recurring_percent}</p>
-                )}
+            <div className={`mt-3 ${!recurringEnabled ? 'opacity-50' : ''}`}>
+              <div className="flex items-center gap-2">
+                <input type="text" inputMode="numeric" value={draft.recurring_percent}
+                  disabled={!recurringEnabled}
+                  onChange={e => handleNumericInput('recurring_percent', e.target.value)}
+                  className={inputClass('recurring_percent')} />
+                <span className="text-sm text-gray-500">%</span>
               </div>
-            )}
+              {errors.recurring_percent && (
+                <p className="text-xs text-red-500 mt-1">{errors.recurring_percent}</p>
+              )}
+            </div>
           </div>
 
           <hr className="border-gray-100" />
 
           {/* Min withdrawal */}
           <div>
-            <p className="text-sm font-semibold text-gray-900 mb-3">Minimum withdrawal</p>
-            <div className="flex gap-4">
+            <p className="text-sm font-semibold text-gray-900">Minimum withdrawal</p>
+            <p className="text-xs text-gray-500 mt-0.5 mb-4">Minimum amount required to request a withdrawal</p>
+            <div className="flex gap-6">
               <div>
-                <div className="flex items-center gap-2">
-                  <input type="text" inputMode="numeric" value={draft.min_withdrawal_uah}
-                    onChange={e => handleNumericInput('min_withdrawal_uah', e.target.value)}
-                    className={inputClassWide('min_withdrawal_uah')} />
-                  <span className="text-sm text-gray-500">UAH</span>
-                </div>
+                <label className="block text-xs text-gray-500 mb-1.5">UAH</label>
+                <input type="text" inputMode="numeric" value={draft.min_withdrawal_uah}
+                  onChange={e => handleNumericInput('min_withdrawal_uah', e.target.value)}
+                  className={inputClassWide('min_withdrawal_uah')} />
                 {errors.min_withdrawal_uah && (
                   <p className="text-xs text-red-500 mt-1">{errors.min_withdrawal_uah}</p>
                 )}
               </div>
               <div>
-                <div className="flex items-center gap-2">
-                  <input type="text" inputMode="numeric" value={draft.min_withdrawal_usdt}
-                    onChange={e => handleNumericInput('min_withdrawal_usdt', e.target.value)}
-                    className={inputClassWide('min_withdrawal_usdt')} />
-                  <span className="text-sm text-gray-500">USDT</span>
-                </div>
+                <label className="block text-xs text-gray-500 mb-1.5">USDT</label>
+                <input type="text" inputMode="numeric" value={draft.min_withdrawal_usdt}
+                  onChange={e => handleNumericInput('min_withdrawal_usdt', e.target.value)}
+                  className={inputClassWide('min_withdrawal_usdt')} />
                 {errors.min_withdrawal_usdt && (
                   <p className="text-xs text-red-500 mt-1">{errors.min_withdrawal_usdt}</p>
                 )}
@@ -646,7 +677,7 @@ function ConfigTab() {
 const TABS: { id: Tab; label: string }[] = [
   { id: 'referrals', label: 'Referrals' },
   { id: 'transactions', label: 'Transactions' },
-  { id: 'balances', label: 'Balances' },
+  { id: 'balances', label: 'Partner Account' },
   { id: 'config', label: 'Settings' },
 ];
 

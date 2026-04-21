@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { formatDate, formatDateTime } from '../utils/format';
 import { SearchIcon } from '../components/Icons';
 import { Pagination } from '../components/Pagination';
-import { InfoTooltip } from '../components/Tooltip';
+import { InfoTooltip, Tooltip } from '../components/Tooltip';
 import { STATUS_STYLES, METHOD_STYLES } from '../utils/styles';
 import { useAuth } from '../hooks/useAuth';
 
@@ -19,6 +19,7 @@ interface Subscription {
   method: string;
   status: string;
   card_pan: string | null;
+  prices: Record<string, { amount: number; currency: string; display_name?: string }> | null;
   started_at: string;
   expires_at: string;
   created_at: string;
@@ -221,13 +222,13 @@ export function SubscriptionsPage() {
             <table className="w-full text-sm">
               <thead className="bg-gray-50 text-gray-600 text-left">
                 <tr>
-                  <th className="px-4 py-3 font-medium w-8"></th>
-                  <th className="px-4 py-3 font-medium">ID</th>
+                  <th className="px-2 py-3 font-medium w-6"></th>
+                  <th className="px-3 py-3 font-medium">ID</th>
                   <th className="px-4 py-3 font-medium">User</th>
                   <th className="px-4 py-3 font-medium">Plan</th>
                   <th className="px-4 py-3 font-medium">Method</th>
                   <th className="px-4 py-3 font-medium">Status</th>
-                  <th className="px-4 py-3 font-medium">Card</th>
+                  <th className="px-4 py-3 font-medium">Prices</th>
                   <th className="px-4 py-3 font-medium">Started</th>
                   <th className="px-4 py-3 font-medium">Expires</th>
                 </tr>
@@ -248,13 +249,13 @@ export function SubscriptionsPage() {
                         onClick={() => toggleExpand(sub.id)}
                         className={`hover:bg-gray-50 transition-colors cursor-pointer ${isExpanded ? 'bg-blue-50' : ''}`}
                       >
-                        <td className="px-4 py-3 text-gray-400">
+                        <td className="px-2 py-3 text-gray-400">
                           <ChevronIcon open={isExpanded} />
                         </td>
-                        <td className="px-4 py-3 font-mono text-gray-400">{sub.id}</td>
+                        <td className="px-3 py-3 font-mono text-gray-400">{sub.id}</td>
                         <td className="px-4 py-3 text-gray-700">
                           <div>{userName}</div>
-                          <div className="text-xs text-gray-400 font-mono">{sub.telegram_id}</div>
+                          <div className="text-xs text-gray-400 font-mono">TG_ID: {sub.telegram_id}</div>
                         </td>
                         <td className="px-4 py-3 text-gray-700">{sub.plan}</td>
                         <td className="px-4 py-3">
@@ -271,7 +272,25 @@ export function SubscriptionsPage() {
                             {sub.status}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-gray-500 text-xs font-mono">{sub.card_pan ?? '-'}</td>
+                        <td className="px-4 py-3 text-gray-500 text-xs">
+                          {sub.prices ? (
+                            <Tooltip content={
+                              <div className="space-y-1">
+                                <div className="font-semibold text-gray-300 mb-1.5">Price snapshot</div>
+                                {Object.entries(sub.prices).map(([k, v]) => (
+                                  <div key={k} className={`flex justify-between gap-4 ${k === sub.plan ? 'text-green-400 font-medium' : ''}`}>
+                                    <span>{v.display_name ?? k}</span>
+                                    <span>{v.amount} {v.currency}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            }>
+                              <span className="cursor-help underline decoration-dotted">
+                                {sub.prices[sub.plan] ? `${sub.prices[sub.plan].amount} ${sub.prices[sub.plan].currency}` : 'View'}
+                              </span>
+                            </Tooltip>
+                          ) : '—'}
+                        </td>
                         <td className="px-4 py-3 text-gray-500">{formatDate(sub.started_at)}</td>
                         <td className="px-4 py-3 text-gray-500">{formatDate(sub.expires_at)}</td>
                       </tr>
@@ -279,7 +298,7 @@ export function SubscriptionsPage() {
                       {/* Expanded events row */}
                       {isExpanded && (
                         <tr key={`${sub.id}-events`}>
-                          <td colSpan={9} className="px-0 py-0">
+                          <td colSpan={10} className="px-0 py-0">
                             <div className="bg-gray-50 border-t border-b border-gray-200 px-8 py-4">
                               <h4 className="text-sm font-semibold text-gray-700 mb-3">Subscription History</h4>
 
@@ -291,18 +310,20 @@ export function SubscriptionsPage() {
                                 <table className="w-full text-sm">
                                   <thead className="text-gray-500 text-left text-xs">
                                     <tr>
+                                      <th className="pb-2 pr-4 font-medium">Event ID</th>
                                       <th className="pb-2 pr-4 font-medium">Event</th>
                                       <th className="pb-2 pr-4 font-medium">Plan</th>
                                       <th className="pb-2 pr-4 font-medium">Method</th>
                                       <th className="pb-2 pr-4 font-medium">Card</th>
                                       <th className="pb-2 pr-4 font-medium">Amount</th>
-                                      <th className="pb-2 pr-4 font-medium">Expires</th>
-                                      <th className="pb-2 font-medium">Date</th>
+                                      <th className="pb-2 pr-4 font-medium">Created</th>
+                                      <th className="pb-2 font-medium">Expires</th>
                                     </tr>
                                   </thead>
                                   <tbody className="divide-y divide-gray-200">
                                     {subEvents.map((ev) => (
                                       <tr key={ev.id} className="text-gray-600">
+                                        <td className="py-2 pr-4 font-mono text-gray-400 text-xs">{ev.id}</td>
                                         <td className="py-2 pr-4">
                                           <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
                                             EVENT_STYLES[ev.event] ?? 'bg-gray-100 text-gray-500'
@@ -324,8 +345,8 @@ export function SubscriptionsPage() {
                                         <td className="py-2 pr-4 text-xs">
                                           {ev.amount ? `${ev.amount} ${ev.currency ?? ''}` : '-'}
                                         </td>
-                                        <td className="py-2 pr-4 text-xs">{formatDate(ev.expires_at)}</td>
-                                        <td className="py-2 text-xs text-gray-400">{formatDateTime(ev.created_at)}</td>
+                                        <td className="py-2 pr-4 text-xs">{formatDate(ev.created_at)}</td>
+                                        <td className="py-2 text-xs text-gray-600">{formatDate(ev.expires_at)}</td>
                                       </tr>
                                     ))}
                                   </tbody>

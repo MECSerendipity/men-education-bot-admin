@@ -69,6 +69,10 @@ export async function migrate() {
   await db.query(`UPDATE subscriptions SET access_revoked = TRUE WHERE status = 'Expired' AND access_revoked = FALSE`);
   await db.query(`UPDATE subscriptions SET access_revoked = TRUE WHERE status = 'Cancelled' AND expires_at < NOW() AND access_revoked = FALSE`);
 
+  // Rename churned → inactive in referrals
+  await db.query(`UPDATE referrals SET status = 'inactive' WHERE status = 'churned'`);
+  await db.query(`ALTER TABLE referrals RENAME COLUMN churned_at TO inactive_at`);
+
   // ── prices: global plan prices ──
   await db.query(`
     CREATE TABLE IF NOT EXISTS prices (
@@ -170,13 +174,13 @@ export async function migrate() {
       status          VARCHAR(20) DEFAULT 'clicked',
       created_at      TIMESTAMPTZ DEFAULT NOW(),
       activated_at    TIMESTAMPTZ,
-      churned_at      TIMESTAMPTZ
+      inactive_at     TIMESTAMPTZ
     );
   `);
 
-  // ── partner_balances: partner earnings balance per user ──
+  // ── partner_accounts: partner earnings balance per user ──
   await db.query(`
-    CREATE TABLE IF NOT EXISTS partner_balances (
+    CREATE TABLE IF NOT EXISTS partner_accounts (
       id              SERIAL PRIMARY KEY,
       telegram_id     BIGINT UNIQUE NOT NULL,
       balance_uah     DECIMAL(10,2) DEFAULT 0,
@@ -243,7 +247,7 @@ export async function migrate() {
   await db.query(`CREATE INDEX IF NOT EXISTS idx_subscription_events_telegram_id ON subscription_events (telegram_id)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_subscription_events_subscription_id ON subscription_events (subscription_id)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_invite_links_telegram_id ON invite_links (telegram_id)`);
-  await db.query(`CREATE INDEX IF NOT EXISTS idx_partner_balances_telegram_id ON partner_balances (telegram_id)`);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_partner_accounts_telegram_id ON partner_accounts (telegram_id)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON referrals (referrer_id)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referred_id ON referrals (referred_id)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_partner_transactions_partner_id ON partner_transactions (partner_id)`);

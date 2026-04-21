@@ -9,6 +9,7 @@ import { sendRulesOrInvite } from './rules.js';
 import { getUserByTelegramId } from '../db/users.js';
 import { planDisplayName, buildPaymentSuccessMessage } from '../services/notifications.js';
 import { escapeHtml } from '../utils/html.js';
+import { refreshMenuKeyboard } from '../keyboards/index.js';
 import { processPartnerCommission } from '../services/partner.js';
 
 /** Register admin approval/denial handlers for USDT payments */
@@ -85,6 +86,7 @@ async function handleAdminDecision(
     // Send rules or invite link only for new subscriptions
     if (!isRenewal) {
       await sendRulesOrInvite(bot, payment.telegram_id);
+      await refreshMenuKeyboard(bot, payment.telegram_id, true);
     }
 
     // Process partner commission

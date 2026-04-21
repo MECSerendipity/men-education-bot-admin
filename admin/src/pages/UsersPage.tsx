@@ -18,6 +18,7 @@ interface User {
   last_name: string | null;
   email: string | null;
   is_subscribed: boolean;
+  ref_code: string | null;
   subscribed_at: string | null;
   expires_at: string | null;
   created_at: string;
@@ -169,8 +170,9 @@ export function UsersPage() {
                   <th className="px-4 py-3 font-medium">Name</th>
                   <th className="px-4 py-3 font-medium">Email</th>
                   <th className="px-4 py-3 font-medium">Subscription</th>
-                  <th className="px-4 py-3 font-medium">Expires</th>
+                  <th className="px-4 py-3 font-medium">Ref Code</th>
                   <th className="px-4 py-3 font-medium">Registered</th>
+                  <th className="px-4 py-3 font-medium">Expires</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -196,8 +198,9 @@ export function UsersPage() {
                           {active ? 'Active' : 'Inactive'}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-gray-500">{formatDate(user.expires_at)}</td>
+                      <td className="px-4 py-3 font-mono text-gray-400 text-xs">{user.ref_code ?? '—'}</td>
                       <td className="px-4 py-3 text-gray-500">{formatDate(user.created_at)}</td>
+                      <td className="px-4 py-3 text-gray-500">{formatDate(user.expires_at)}</td>
                     </tr>
                   );
                 })}

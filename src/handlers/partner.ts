@@ -25,7 +25,7 @@ async function requireSubscription(ctx: any): Promise<boolean> {
   const isSubscribed = await hasActiveSubscription(ctx.from.id);
   if (!isSubscribed) {
     await ctx.editMessageText(
-      'Меню Партнера доступне тільки для користувачів з активною підпискою.',
+      'Реферальна система доступна тільки для користувачів з активною підпискою.',
       {
         reply_markup: {
           inline_keyboard: [
@@ -48,7 +48,7 @@ export function registerPartnerHandler(bot: Telegraf) {
     const isSubscribed = await hasActiveSubscription(telegramId);
     if (!isSubscribed) {
       await ctx.reply(
-        'Меню Партнера доступне тільки для користувачів з активною підпискою.',
+        'Реферальна система доступна тільки для користувачів з активною підпискою.',
         {
           reply_markup: {
             inline_keyboard: [
@@ -97,7 +97,7 @@ export function registerPartnerHandler(bot: Telegraf) {
     const telegramId = ctx.from.id;
     const stats = await getPartnerStats(telegramId);
 
-    const paid = stats.active + stats.churned;
+    const paid = stats.active + stats.inactive;
 
     let earningsText = 'Мої нарахування:\n';
     earningsText += `- Всього зароблено: ${stats.totalEarnedUah.toFixed(2)} UAH | Виведено: ${stats.totalWithdrawnUah.toFixed(2)} UAH\n`;
@@ -398,8 +398,8 @@ export function registerPartnerHandler(bot: Telegraf) {
     }
 
     const active = referrals.filter(r => r.status === 'active').length;
-    const churned = referrals.filter(r => r.status === 'churned').length;
-    const paid = active + churned;
+    const inactive = referrals.filter(r => r.status === 'inactive').length;
+    const paid = active + inactive;
 
     await ctx.editMessageText(
       `\u{1F465} Мої реферали\n\n` +
@@ -441,13 +441,13 @@ export function registerPartnerHandler(bot: Telegraf) {
       return `@${start}**${end}`;
     };
 
-    const header = 'Username,Clicked,Active,Churned';
+    const header = 'Username,Clicked,Active,Inactive';
     const rows = referrals.map(r => {
       const username = maskUsername(r.username);
       const clicked = formatCsvDate(r.created_at);
       const active = r.status === 'active' ? 'true' : 'false';
-      const churned = r.status === 'churned' ? 'true' : 'false';
-      return `${username},${clicked},${active},${churned}`;
+      const inactive = r.status === 'inactive' ? 'true' : 'false';
+      return `${username},${clicked},${active},${inactive}`;
     });
 
     const csv = [header, ...rows].join('\n');
@@ -483,7 +483,7 @@ async function showPartnerMenu(bot: Telegraf, ctx: any): Promise<void> {
   const recurPct = config.recurring_enabled ? `${config.recurring_percent}%` : 'вимкнено';
 
   const text =
-    '\u{1F91D} *Меню партнера*\n\n' +
+    '\u{1F680} *Реферальна система*\n\n' +
     'Заробляй разом з Men Education Club!\n' +
     'Просто поділись посиланням — і отримуй реальні гроші з кожної оплати.\n\n' +
     '\u{1F4B0} *Як це працює:*\n\n' +

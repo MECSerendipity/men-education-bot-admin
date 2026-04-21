@@ -5,10 +5,10 @@ export interface Referral {
   id: number;
   referrer_id: number;
   referred_id: number;
-  status: string; // clicked | active | churned
+  status: string; // clicked | active | inactive
   created_at: Date;
   activated_at: Date | null;
-  churned_at: Date | null;
+  inactive_at: Date | null;
 }
 
 export interface PartnerTransaction {
@@ -110,20 +110,20 @@ export async function activateReferral(referredId: number): Promise<void> {
   );
 }
 
-/** Mark referral as churned (referred user was kicked) — breaks commission chain forever */
-export async function churnReferral(referredId: number): Promise<void> {
+/** Mark referral as inactive (referred user was kicked) — breaks commission chain forever */
+export async function deactivateReferral(referredId: number): Promise<void> {
   await db.query(
-    `UPDATE referrals SET status = 'churned', churned_at = NOW()
+    `UPDATE referrals SET status = 'inactive', inactive_at = NOW()
      WHERE referred_id = $1 AND status IN ('active', 'clicked')`,
     [referredId],
   );
 }
 
-/** Get partner stats: clicks, active referrals, churned, earnings, withdrawals */
+/** Get partner stats: clicks, active referrals, inactive, earnings, withdrawals */
 export async function getPartnerStats(referrerId: number): Promise<{
   clicks: number;
   active: number;
-  churned: number;
+  inactive: number;
   totalEarnedUah: number;
   totalEarnedUsdt: number;
   totalWithdrawnUah: number;
@@ -134,7 +134,7 @@ export async function getPartnerStats(referrerId: number): Promise<{
       `SELECT
         COUNT(*) AS clicks,
         COUNT(*) FILTER (WHERE status = 'active') AS active,
-        COUNT(*) FILTER (WHERE status = 'churned') AS churned
+        COUNT(*) FILTER (WHERE status = 'inactive') AS inactive
        FROM referrals WHERE referrer_id = $1`,
       [referrerId],
     ),
@@ -159,7 +159,7 @@ export async function getPartnerStats(referrerId: number): Promise<{
   return {
     clicks: Number(countsResult.rows[0].clicks),
     active: Number(countsResult.rows[0].active),
-    churned: Number(countsResult.rows[0].churned),
+    inactive: Number(countsResult.rows[0].inactive),
     totalEarnedUah: Number(earningsResult.rows[0].total_uah),
     totalEarnedUsdt: Number(earningsResult.rows[0].total_usdt),
     totalWithdrawnUah: Number(withdrawalsResult.rows[0].total_uah),
@@ -167,10 +167,10 @@ export async function getPartnerStats(referrerId: number): Promise<{
   };
 }
 
-/** Ensure partner_balances row exists for a user (upsert with 0) */
+/** Ensure partner_accounts row exists for a user (upsert with 0) */
 async function ensurePartnerBalance(client: { query: (text: string, params?: unknown[]) => Promise<{ rows: Record<string, unknown>[] }> }, telegramId: number): Promise<void> {
   await client.query(
-    `INSERT INTO partner_balances (telegram_id) VALUES ($1) ON CONFLICT (telegram_id) DO NOTHING`,
+    `INSERT INTO partner_accounts (telegram_id) VALUES ($1) ON CONFLICT (telegram_id) DO NOTHING`,
     [telegramId],
   );
 }
@@ -178,7 +178,7 @@ async function ensurePartnerBalance(client: { query: (text: string, params?: unk
 /** Get partner balance */
 export async function getPartnerBalance(telegramId: number): Promise<{ uah: number; usdt: number }> {
   const result = await db.query(
-    'SELECT balance_uah, balance_usdt FROM partner_balances WHERE telegram_id = $1',
+    'SELECT balance_uah, balance_usdt FROM partner_accounts WHERE telegram_id = $1',
     [telegramId],
   );
   return {
@@ -212,7 +212,7 @@ export async function addPartnerEarning(params: {
     await ensurePartnerBalance(client, params.partnerId);
     const balanceField = params.currency === 'UAH' ? 'balance_uah' : 'balance_usdt';
     await client.query(
-      `UPDATE partner_balances SET ${balanceField} = ${balanceField} + $1, updated_at = NOW() WHERE telegram_id = $2`,
+      `UPDATE partner_accounts SET ${balanceField} = ${balanceField} + $1, updated_at = NOW() WHERE telegram_id = $2`,
       [params.amount, params.partnerId],
     );
 
@@ -234,7 +234,7 @@ export async function createWithdrawalRequest(telegramId: number, amount: number
     // Verify balance
     const balanceField = currency === 'UAH' ? 'balance_uah' : 'balance_usdt';
     const balanceResult = await client.query(
-      `SELECT ${balanceField} AS balance FROM partner_balances WHERE telegram_id = $1 FOR UPDATE`,
+      `SELECT ${balanceField} AS balance FROM partner_accounts WHERE telegram_id = $1 FOR UPDATE`,
       [telegramId],
     );
     const balance = Number(balanceResult.rows[0]?.balance ?? 0);
@@ -245,7 +245,7 @@ export async function createWithdrawalRequest(telegramId: number, amount: number
 
     // Deduct from balance immediately
     await client.query(
-      `UPDATE partner_balances SET ${balanceField} = ${balanceField} - $1, updated_at = NOW() WHERE telegram_id = $2`,
+      `UPDATE partner_accounts SET ${balanceField} = ${balanceField} - $1, updated_at = NOW() WHERE telegram_id = $2`,
       [amount, telegramId],
     );
 
@@ -290,7 +290,7 @@ export async function processWithdrawal(id: number, approved: boolean, adminNote
       const tx = result.rows[0] as PartnerTransaction;
       const balanceField = tx.currency === 'UAH' ? 'balance_uah' : 'balance_usdt';
       await client.query(
-        `UPDATE partner_balances SET ${balanceField} = ${balanceField} + $1, updated_at = NOW() WHERE telegram_id = $2`,
+        `UPDATE partner_accounts SET ${balanceField} = ${balanceField} + $1, updated_at = NOW() WHERE telegram_id = $2`,
         [tx.amount, tx.partner_id],
       );
     }

@@ -12,6 +12,7 @@ import { reloadTexts } from '../texts/index.js';
 import { sendPaymentNotification, buildPaymentSuccessMessage, buildFirstPaymentDeclinedMessage } from '../services/notifications.js';
 import { getUserByTelegramId } from '../db/users.js';
 import { getPaymentMessage, deletePaymentMessage } from '../utils/payment-messages.js';
+import { refreshMenuKeyboard } from '../keyboards/index.js';
 import { processPartnerCommission } from '../services/partner.js';
 
 const MAX_BODY_SIZE = 64 * 1024; // 64 KB — more than enough for WayForPay callbacks
@@ -312,6 +313,8 @@ async function handleCallback(req: IncomingMessage, res: ServerResponse, bot: Te
       // Send rules or invite link only for new subscriptions
       if (!isRenewal) {
         await sendRulesOrInvite(bot, payment.telegram_id);
+        // Update reply keyboard — user is now subscribed, show partner button
+        await refreshMenuKeyboard(bot, payment.telegram_id, true);
       }
 
       // Send card payment notification to admin channel
