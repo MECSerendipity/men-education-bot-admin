@@ -69,10 +69,6 @@ export async function migrate() {
   await db.query(`UPDATE subscriptions SET access_revoked = TRUE WHERE status = 'Expired' AND access_revoked = FALSE`);
   await db.query(`UPDATE subscriptions SET access_revoked = TRUE WHERE status = 'Cancelled' AND expires_at < NOW() AND access_revoked = FALSE`);
 
-  // Rename churned → inactive in referrals
-  await db.query(`UPDATE referrals SET status = 'inactive' WHERE status = 'churned'`);
-  await db.query(`ALTER TABLE referrals RENAME COLUMN churned_at TO inactive_at`);
-
   // ── prices: global plan prices ──
   await db.query(`
     CREATE TABLE IF NOT EXISTS prices (
@@ -254,6 +250,9 @@ export async function migrate() {
   await db.query(`CREATE INDEX IF NOT EXISTS idx_partner_transactions_created_at ON partner_transactions (created_at DESC)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_system_logs_created_at ON system_logs (created_at DESC)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_system_logs_level ON system_logs (level)`);
+
+  // Backfill: rename churned → inactive in referrals (safe for both old and new databases)
+  await db.query(`UPDATE referrals SET status = 'inactive' WHERE status = 'churned'`);
 
   logger.info('Database migrated');
 }

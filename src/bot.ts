@@ -11,6 +11,7 @@ import { registerNavigationHandlers } from './handlers/navigation.js';
 import { registerPartnerHandler } from './handlers/partner.js';
 import { handleJoinRequest } from './services/invite.js';
 import { registerRulesHandler } from './handlers/rules.js';
+import { registerAdminMediaHandler } from './handlers/admin-media.js';
 
 /** Creates and configures the bot instance with all handlers */
 export function createBot(token: string): Telegraf {
@@ -39,6 +40,9 @@ export function createBot(token: string): Telegraf {
   registerUsdtAdminHandler(bot);
   registerRulesHandler(bot);
   registerPartnerHandler(bot);
+
+  // Admin media handler (returns file_id for video notes, videos, photos)
+  registerAdminMediaHandler(bot);
 
   // Handle join requests for private channels
   handleJoinRequest(bot);

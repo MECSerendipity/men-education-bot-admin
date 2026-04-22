@@ -9,6 +9,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFile, writeFile } from 'node:fs/promises';
 import pg from 'pg';
+import multipart from '@fastify/multipart';
 
 /* ---------- Configuration ---------- */
 
@@ -40,6 +41,9 @@ const corsOrigins = process.env.ADMIN_CORS_ORIGIN
   : ['http://localhost:5173', 'http://localhost:3001', 'http://127.0.0.1:5173', 'http://127.0.0.1:3001'];
 
 await app.register(cors, { origin: corsOrigins });
+
+// Multipart support for file uploads (50 MB limit)
+await app.register(multipart, { limits: { fileSize: 50 * 1024 * 1024 } });
 
 // Global rate limit — 100 requests per minute per IP
 await app.register(rateLimit, {
@@ -918,6 +922,322 @@ app.post<{
     } catch (err) {
       app.log.error(err, 'Failed to send broadcast');
       return reply.status(500).send({ error: 'Failed to send message' });
+    }
+  }
+);
+
+/** In-memory broadcast progress tracker */
+interface BroadcastJob {
+  total: number;
+  sent: number;
+  failed: number;
+  done: boolean;
+  errors: { telegramId: number; error: string }[];
+}
+const broadcastJobs = new Map<string, BroadcastJob>();
+
+/** POST /api/broadcast/video-note — start video note broadcast */
+app.post<{
+  Body: {
+    fileId: string;
+    target: 'all' | 'subscribers' | 'specific';
+    telegramIds?: string[];
+  };
+}>(
+  '/api/broadcast/video-note',
+  { preHandler: [authenticate] },
+  async (request, reply) => {
+    try {
+      const { fileId, target, telegramIds: specificIds } = request.body;
+
+      if (!fileId?.trim()) {
+        return reply.status(400).send({ error: 'fileId is required' });
+      }
+
+      if (!BOT_TOKEN) {
+        return reply.status(500).send({ error: 'BOT_TOKEN not configured' });
+      }
+
+      // Build user list based on target
+      let telegramIds: number[] = [];
+      if (target === 'specific' && specificIds?.length) {
+        telegramIds = specificIds.map(id => Number(id)).filter(id => id > 0);
+        if (telegramIds.length === 0) {
+          return reply.status(400).send({ error: 'No valid Telegram IDs provided' });
+        }
+      } else if (target === 'subscribers') {
+        const result = await dbPool.query(`SELECT telegram_id FROM users WHERE is_subscribed = TRUE`);
+        telegramIds = result.rows.map((r: { telegram_id: number }) => Number(r.telegram_id));
+      } else {
+        const result = await dbPool.query(`SELECT telegram_id FROM users`);
+        telegramIds = result.rows.map((r: { telegram_id: number }) => Number(r.telegram_id));
+      }
+
+      if (telegramIds.length === 0) {
+        return { success: true, sent: 0, total: 0 };
+      }
+
+      // Create job and start in background
+      const jobId = `vn_${Date.now()}`;
+      const job: BroadcastJob = { total: telegramIds.length, sent: 0, failed: 0, done: false, errors: [] };
+      broadcastJobs.set(jobId, job);
+
+      // Run in background (don't await)
+      (async () => {
+        for (const tgId of telegramIds) {
+          try {
+            const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendVideoNote`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chat_id: tgId, video_note: fileId.trim() }),
+            });
+            const data = await res.json() as { ok: boolean; description?: string };
+            if (data.ok) {
+              job.sent++;
+            } else {
+              job.failed++;
+              job.errors.push({ telegramId: tgId, error: data.description ?? 'Unknown error' });
+            }
+          } catch (err) {
+            job.failed++;
+            job.errors.push({ telegramId: tgId, error: err instanceof Error ? err.message : 'Network error' });
+          }
+          // Rate limit: 25 per second
+          if ((job.sent + job.failed) % 25 === 0) await new Promise(r => setTimeout(r, 1000));
+        }
+        job.done = true;
+        // Cleanup after 5 minutes
+        setTimeout(() => broadcastJobs.delete(jobId), 5 * 60 * 1000);
+      })();
+
+      return { success: true, jobId, total: telegramIds.length };
+    } catch (err) {
+      app.log.error(err, 'Failed to start video note broadcast');
+      return reply.status(500).send({ error: 'Failed to start broadcast' });
+    }
+  }
+);
+
+/** GET /api/broadcast/progress/:jobId — check any broadcast progress */
+app.get<{ Params: { jobId: string } }>(
+  '/api/broadcast/progress/:jobId',
+  { preHandler: [authenticate] },
+  async (request, reply) => {
+    const job = broadcastJobs.get(request.params.jobId);
+    if (!job) {
+      return reply.status(404).send({ error: 'Job not found' });
+    }
+    return { total: job.total, sent: job.sent, failed: job.failed, done: job.done, errors: job.errors };
+  }
+);
+
+// Keep old endpoint for backwards compat
+app.get<{ Params: { jobId: string } }>(
+  '/api/broadcast/video-note/progress/:jobId',
+  { preHandler: [authenticate] },
+  async (request, reply) => {
+    const job = broadcastJobs.get(request.params.jobId);
+    if (!job) return reply.status(404).send({ error: 'Job not found' });
+    return { total: job.total, sent: job.sent, failed: job.failed, done: job.done, errors: job.errors };
+  }
+);
+
+/** POST /api/broadcast/upload — upload file via Telegram to get file_id */
+app.post(
+  '/api/broadcast/upload',
+  { preHandler: [authenticate] },
+  async (request, reply) => {
+    try {
+      if (!BOT_TOKEN) return reply.status(500).send({ error: 'BOT_TOKEN not configured' });
+
+      const adminId = process.env.ADMIN_TELEGRAM_IDS?.split(',')[0]?.trim();
+      if (!adminId) return reply.status(500).send({ error: 'ADMIN_TELEGRAM_IDS not configured' });
+
+      const data = await (request as any).file();
+      if (!data) return reply.status(400).send({ error: 'No file uploaded' });
+
+      const buffer = await data.toBuffer();
+      const filename = data.filename;
+      const mime = data.mimetype ?? '';
+
+      // Determine Telegram method based on mime type
+      let method: string;
+      let fieldName: string;
+      if (mime.startsWith('image/')) {
+        method = 'sendPhoto';
+        fieldName = 'photo';
+      } else if (mime.startsWith('video/')) {
+        method = 'sendVideo';
+        fieldName = 'video';
+      } else {
+        method = 'sendDocument';
+        fieldName = 'document';
+      }
+
+      // Upload to Telegram by sending to admin, then delete the message
+      const formData = new FormData();
+      formData.append('chat_id', adminId);
+      formData.append(fieldName, new Blob([buffer]), filename);
+
+      const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/${method}`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      const result = await res.json() as {
+        ok: boolean;
+        description?: string;
+        result?: {
+          message_id: number;
+          photo?: { file_id: string }[];
+          video?: { file_id: string };
+          document?: { file_id: string };
+        };
+      };
+
+      if (!result.ok || !result.result) {
+        return reply.status(400).send({ error: result.description ?? 'Failed to upload' });
+      }
+
+      // Extract file_id
+      let fileId: string | null = null;
+      if (result.result.photo) {
+        fileId = result.result.photo[result.result.photo.length - 1].file_id;
+      } else if (result.result.video) {
+        fileId = result.result.video.file_id;
+      } else if (result.result.document) {
+        fileId = result.result.document.file_id;
+      }
+
+      // Delete the message from admin chat
+      try {
+        await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/deleteMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: adminId, message_id: result.result.message_id }),
+        });
+      } catch { /* ignore delete failure */ }
+
+      const mediaType = mime.startsWith('image/') ? 'photo' : mime.startsWith('video/') ? 'video' : 'document';
+
+      return { success: true, fileId, mediaType, filename };
+    } catch (err) {
+      app.log.error(err, 'Failed to upload file');
+      return reply.status(500).send({ error: 'Failed to upload file' });
+    }
+  }
+);
+
+/** POST /api/broadcast/message — send text/media message with optional inline buttons to users */
+app.post<{
+  Body: {
+    text: string;
+    target: 'all' | 'subscribers' | 'specific';
+    telegramIds?: string[];
+    buttons?: { text: string; url: string; row: number }[];
+    mediaType?: 'photo' | 'video' | 'document';
+    mediaFileId?: string;
+  };
+}>(
+  '/api/broadcast/message',
+  { preHandler: [authenticate] },
+  async (request, reply) => {
+    try {
+      const { text, target, telegramIds: specificIds, buttons, mediaType, mediaFileId } = request.body;
+
+      if (!text?.trim()) {
+        return reply.status(400).send({ error: 'Text is required' });
+      }
+
+      if (!BOT_TOKEN) {
+        return reply.status(500).send({ error: 'BOT_TOKEN not configured' });
+      }
+
+      // Build user list
+      let telegramIds: number[] = [];
+      if (target === 'specific' && specificIds?.length) {
+        telegramIds = specificIds.map(id => Number(id)).filter(id => id > 0);
+        if (telegramIds.length === 0) {
+          return reply.status(400).send({ error: 'No valid Telegram IDs provided' });
+        }
+      } else if (target === 'subscribers') {
+        const result = await dbPool.query(`SELECT telegram_id FROM users WHERE is_subscribed = TRUE`);
+        telegramIds = result.rows.map((r: { telegram_id: number }) => Number(r.telegram_id));
+      } else {
+        const result = await dbPool.query(`SELECT telegram_id FROM users`);
+        telegramIds = result.rows.map((r: { telegram_id: number }) => Number(r.telegram_id));
+      }
+
+      if (telegramIds.length === 0) {
+        return { success: true, sent: 0, total: 0 };
+      }
+
+      // Build inline keyboard
+      let replyMarkup: string | undefined;
+      if (buttons && buttons.length > 0) {
+        const rows = new Map<number, { text: string; url: string }[]>();
+        for (const btn of buttons) {
+          if (!btn.text?.trim() || !btn.url?.trim()) continue;
+          const row = btn.row ?? 0;
+          if (!rows.has(row)) rows.set(row, []);
+          rows.get(row)!.push({ text: btn.text.trim(), url: btn.url.trim() });
+        }
+        const inlineKeyboard = [...rows.entries()].sort(([a], [b]) => a - b).map(([, btns]) => btns);
+        if (inlineKeyboard.length > 0) {
+          replyMarkup = JSON.stringify({ inline_keyboard: inlineKeyboard });
+        }
+      }
+
+      // Start background job
+      const jobId = `msg_${Date.now()}`;
+      const job: BroadcastJob = { total: telegramIds.length, sent: 0, failed: 0, done: false, errors: [] };
+      broadcastJobs.set(jobId, job);
+
+      (async () => {
+        for (const tgId of telegramIds) {
+          try {
+            let apiMethod = 'sendMessage';
+            const body: Record<string, unknown> = { chat_id: tgId, parse_mode: 'HTML' };
+
+            if (mediaType && mediaFileId) {
+              // Send media with caption
+              const mediaFieldMap: Record<string, string> = { photo: 'photo', video: 'video', document: 'document' };
+              const methodMap: Record<string, string> = { photo: 'sendPhoto', video: 'sendVideo', document: 'sendDocument' };
+              apiMethod = methodMap[mediaType] ?? 'sendMessage';
+              body[mediaFieldMap[mediaType] ?? 'document'] = mediaFileId;
+              body.caption = text.trim();
+            } else {
+              body.text = text.trim();
+            }
+
+            if (replyMarkup) body.reply_markup = replyMarkup;
+
+            const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/${apiMethod}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+            });
+            const data = await res.json() as { ok: boolean; description?: string };
+            if (data.ok) {
+              job.sent++;
+            } else {
+              job.failed++;
+              job.errors.push({ telegramId: tgId, error: data.description ?? 'Unknown error' });
+            }
+          } catch (err) {
+            job.failed++;
+            job.errors.push({ telegramId: tgId, error: err instanceof Error ? err.message : 'Network error' });
+          }
+          if ((job.sent + job.failed) % 25 === 0) await new Promise(r => setTimeout(r, 1000));
+        }
+        job.done = true;
+        setTimeout(() => broadcastJobs.delete(jobId), 5 * 60 * 1000);
+      })();
+
+      return { success: true, jobId, total: telegramIds.length };
+    } catch (err) {
+      app.log.error(err, 'Failed to start message broadcast');
+      return reply.status(500).send({ error: 'Failed to start broadcast' });
     }
   }
 );

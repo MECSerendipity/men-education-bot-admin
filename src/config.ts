@@ -23,6 +23,12 @@ export const CARD = {
   adminThreadId: process.env.CARD_ADMIN_THREAD_ID ?? '',
 } as const;
 
+/** Admin whitelist — telegram IDs that can receive file_id from bot */
+export const ADMIN_IDS: number[] = (process.env.ADMIN_TELEGRAM_IDS ?? '')
+  .split(',')
+  .map((id) => Number(id.trim()))
+  .filter((id) => id > 0);
+
 /** Partner system admin notification config */
 export const PARTNER = {
   withdrawalThreadId: process.env.PARTNER_WITHDRAWAL_THREAD_ID ?? '7',

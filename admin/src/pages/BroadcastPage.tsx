@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../hooks/useAuth';
+import { InfoTooltip } from '../components/Tooltip';
 
 /* ---------- Types ---------- */
 
@@ -14,13 +15,12 @@ interface LayoutItem {
   row: number;
 }
 
-type SubPage = 'panel' | null;
+type SubPage = 'panel' | 'video-note' | 'bot-broadcast' | null;
 
 /* ---------- Chat presets ---------- */
 
 const CHAT_PRESETS = [
   { label: 'Men Education Club', chatId: '-1003975579938' },
-  { label: 'Men Education Bot', chatId: '8618067926' },
 ];
 
 /* ---------- Icons ---------- */
@@ -157,7 +157,7 @@ function PanelPage({ onBack }: { onBack: () => void }) {
   const [editLink, setEditLink] = useState('');
 
   // Compose state
-  const [selectedChat, setSelectedChat] = useState('');
+  const [selectedChat, setSelectedChat] = useState(CHAT_PRESETS[0]?.chatId ?? '');
   const [text, setText] = useState('');
   const [layout, setLayout] = useState<LayoutItem[]>([]);
   const [sending, setSending] = useState(false);
@@ -409,16 +409,9 @@ function PanelPage({ onBack }: { onBack: () => void }) {
           {/* Destination */}
           <div className="mb-3">
             <label className="block text-xs font-medium text-gray-500 mb-1">Куди надіслати</label>
-            <select
-              value={selectedChat}
-              onChange={(e) => setSelectedChat(e.target.value)}
-              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
-            >
-              <option value="">Оберіть чат...</option>
-              {CHAT_PRESETS.map((p) => (
-                <option key={p.chatId} value={p.chatId}>{p.label}</option>
-              ))}
-            </select>
+            <div className="px-3 py-2 text-sm border border-gray-200 rounded-lg bg-gray-50 text-gray-700">
+              Men Education Club
+            </div>
           </div>
 
           {/* Text */}
@@ -568,6 +561,754 @@ function PanelPage({ onBack }: { onBack: () => void }) {
   );
 }
 
+/* ---------- Shared Types ---------- */
+
+interface UserOption {
+  telegram_id: number;
+  username: string | null;
+  is_subscribed: boolean;
+}
+
+/* ---------- Bot Broadcast Sub-Page ---------- */
+
+interface InlineBtn {
+  text: string;
+  url: string;
+  row: number;
+}
+
+function BotBroadcastPage({ onBack }: { onBack: () => void }) {
+  const [text, setText] = useState('');
+  const [target, setTarget] = useState<'all' | 'subscribers' | 'specific'>('all');
+  const [selectedUsers, setSelectedUsers] = useState<UserOption[]>([]);
+  const [userSearch, setUserSearch] = useState('');
+  const [userOptions, setUserOptions] = useState<UserOption[]>([]);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const [loadingUsers, setLoadingUsers] = useState(false);
+  const [inlineButtons, setInlineButtons] = useState<InlineBtn[]>([]);
+  const [newBtnText, setNewBtnText] = useState('');
+  const [newBtnUrl, setNewBtnUrl] = useState('');
+  const [mediaType, setMediaType] = useState<'none' | 'photo' | 'video' | 'document'>('none');
+  const [mediaFileId, setMediaFileId] = useState('');
+  const [mediaFilename, setMediaFilename] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [progress, setProgress] = useState<{ total: number; sent: number; failed: number; done: boolean; errors: { telegramId: number; error: string }[] } | null>(null);
+  const { headers } = useAuth();
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showDropdown) return;
+    function handleClick(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) setShowDropdown(false);
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [showDropdown]);
+
+  useEffect(() => {
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, []);
+
+  useEffect(() => {
+    if (target !== 'specific') return;
+    const timer = setTimeout(async () => {
+      setLoadingUsers(true);
+      try {
+        const params = new URLSearchParams({ page: '1', limit: '50' });
+        if (userSearch.trim()) params.set('search', userSearch.trim());
+        const res = await fetch(`/api/users?${params}`, { headers });
+        if (res.ok) {
+          const data = await res.json();
+          setUserOptions(data.users.map((u: { telegram_id: number; username: string | null; is_subscribed: boolean }) => ({
+            telegram_id: u.telegram_id, username: u.username, is_subscribed: u.is_subscribed,
+          })));
+        }
+      } catch { /* ignore */ }
+      setLoadingUsers(false);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [userSearch, target]);
+
+  function toggleUser(user: UserOption) {
+    setSelectedUsers(prev => prev.some(u => u.telegram_id === user.telegram_id)
+      ? prev.filter(u => u.telegram_id !== user.telegram_id) : [...prev, user]);
+  }
+
+  function addButton() {
+    if (!newBtnText.trim() || !newBtnUrl.trim()) return;
+    const maxRow = inlineButtons.length > 0 ? Math.max(...inlineButtons.map(b => b.row)) : -1;
+    setInlineButtons([...inlineButtons, { text: newBtnText.trim(), url: newBtnUrl.trim(), row: maxRow + 1 }]);
+    setNewBtnText('');
+    setNewBtnUrl('');
+  }
+
+  function removeButton(index: number) {
+    setInlineButtons(inlineButtons.filter((_, i) => i !== index));
+  }
+
+  function startPolling(jobId: string) {
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/broadcast/progress/${jobId}`, { headers });
+        if (!res.ok) return;
+        const data = await res.json();
+        setProgress(data);
+        if (data.done) {
+          if (pollRef.current) clearInterval(pollRef.current);
+          pollRef.current = null;
+          setSending(false);
+          setResult({
+            ok: true,
+            message: `Розсилка завершена: ${data.sent} надіслано${data.failed ? `, ${data.failed} помилок` : ''} / ${data.total} всього`,
+          });
+        }
+      } catch { /* ignore */ }
+    }, 1000);
+  }
+
+  async function handleSend() {
+    if (!text.trim()) return;
+    if (target === 'specific' && selectedUsers.length === 0) return;
+    setSending(true);
+    setResult(null);
+    setProgress(null);
+
+    try {
+      const res = await fetch('/api/broadcast/message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify({
+          text: text.trim(),
+          target,
+          telegramIds: target === 'specific' ? selectedUsers.map(u => String(u.telegram_id)) : undefined,
+          buttons: inlineButtons.length > 0 ? inlineButtons : undefined,
+          mediaType: mediaType !== 'none' ? mediaType : undefined,
+          mediaFileId: mediaType !== 'none' && mediaFileId.trim() ? mediaFileId.trim() : undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setResult({ ok: false, message: data.error ?? 'Failed to send' });
+        setSending(false);
+      } else if (data.jobId) {
+        setProgress({ total: data.total, sent: 0, failed: 0, done: false, errors: [] });
+        startPolling(data.jobId);
+      } else {
+        setResult({ ok: true, message: 'Відправлено!' });
+        setSending(false);
+      }
+    } catch {
+      setResult({ ok: false, message: 'Network error' });
+      setSending(false);
+    }
+  }
+
+  const canSend = text.trim() && !sending && (target !== 'specific' || selectedUsers.length > 0);
+
+  return (
+    <div className="overflow-y-auto h-full pb-6">
+      <div className="flex items-center gap-3 mb-5">
+        <button onClick={onBack} className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg cursor-pointer transition-colors">
+          <BackIcon />
+        </button>
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900">{'\u{1F4E2}'} Розсилка в бот</h2>
+          <p className="text-sm text-gray-500">Масова розсилка повідомлення юзерам бота</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Column 1: Text + Buttons */}
+        <div className="bg-white border border-gray-200 rounded-xl p-5 flex flex-col">
+          <h3 className="text-sm font-semibold text-gray-900 mb-3">Повідомлення</h3>
+
+          <div className="mb-3">
+            <label className="block text-xs font-medium text-gray-500 mb-1">Текст</label>
+            <textarea
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              rows={5}
+              placeholder="Введіть текст (HTML підтримується)..."
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y font-mono"
+            />
+            <p className="text-xs text-gray-400 mt-1">&lt;b&gt;жирний&lt;/b&gt; &lt;i&gt;курсив&lt;/i&gt; &lt;a href=""&gt;посилання&lt;/a&gt;</p>
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Inline кнопки</label>
+            {inlineButtons.length > 0 && (
+              <div className="space-y-1.5 mb-2">
+                {inlineButtons.map((btn, i) => (
+                  <div key={i} className="flex items-center gap-2 px-2.5 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs">
+                    <span className="font-medium text-gray-700 flex-1 truncate">{btn.text}</span>
+                    <span className="text-gray-400 truncate max-w-[100px]">{btn.url}</span>
+                    <button onClick={() => removeButton(i)} className="text-gray-300 hover:text-red-500 cursor-pointer shrink-0">&times;</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="space-y-1.5">
+              <input type="text" value={newBtnText} onChange={(e) => setNewBtnText(e.target.value)}
+                placeholder="Текст кнопки" className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <input type="text" value={newBtnUrl} onChange={(e) => setNewBtnUrl(e.target.value)}
+                placeholder="https://..." className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <button onClick={addButton} disabled={!newBtnText.trim() || !newBtnUrl.trim()}
+                className="w-full flex items-center justify-center gap-1 px-3 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-colors">
+                <PlusIcon /> Додати кнопку
+              </button>
+            </div>
+          </div>
+
+          {/* Media attachment */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">Медіа (необов'язково)</label>
+            {mediaFileId ? (
+              <div className="flex items-center gap-2 px-3 py-2.5 bg-green-50 border border-green-200 rounded-lg">
+                <span className="text-xs text-green-700 font-medium flex-1 truncate">
+                  {mediaType === 'photo' ? '\u{1F5BC}\u{FE0F}' : mediaType === 'video' ? '\u{1F3AC}' : '\u{1F4CE}'} {mediaFilename || 'Файл завантажено'}
+                </span>
+                <button onClick={() => { setMediaFileId(''); setMediaType('none'); setMediaFilename(''); }}
+                  className="text-green-400 hover:text-red-500 cursor-pointer text-sm">&times;</button>
+              </div>
+            ) : (
+              <label className={`flex items-center justify-center gap-2 px-3 py-3 border-2 border-dashed rounded-lg cursor-pointer transition-colors ${
+                uploading ? 'border-blue-300 bg-blue-50' : 'border-gray-300 hover:border-blue-400 hover:bg-gray-50'
+              }`}>
+                <input type="file" className="hidden"
+                  disabled={uploading}
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    setUploading(true);
+                    try {
+                      const formData = new FormData();
+                      formData.append('file', file);
+                      const res = await fetch('/api/broadcast/upload', {
+                        method: 'POST',
+                        headers: { Authorization: headers.Authorization },
+                        body: formData,
+                      });
+                      const data = await res.json();
+                      if (res.ok && data.fileId) {
+                        setMediaFileId(data.fileId);
+                        setMediaType(data.mediaType ?? 'document');
+                        setMediaFilename(data.filename ?? file.name);
+                      }
+                    } catch { /* ignore */ }
+                    setUploading(false);
+                    e.target.value = '';
+                  }}
+                />
+                <div className="text-center">
+                  <span className="text-sm text-gray-500 block">
+                    {uploading ? 'Завантаження...' : 'Натисни щоб завантажити фото, відео або файл'}
+                  </span>
+                  {!uploading && (
+                    <span className="text-xs text-gray-400 block mt-0.5">
+                      JPG, PNG, GIF, MP4, PDF, DOC, XLS, ZIP — до 50 МБ
+                    </span>
+                  )}
+                </div>
+              </label>
+            )}
+          </div>
+        </div>
+
+        {/* Column 2: Preview */}
+        <div className="bg-white border border-gray-200 rounded-xl p-5">
+          <h3 className="text-sm font-semibold text-gray-900 mb-3">Прев'ю</h3>
+          <div className="bg-gray-100 rounded-xl p-4 flex justify-center">
+            <div className="bg-gray-900 rounded-xl p-4 text-white w-full max-w-sm">
+              <div className="text-sm whitespace-pre-wrap leading-relaxed mb-3">
+                {text || <span className="text-gray-500 italic">Текст повідомлення...</span>}
+              </div>
+              {inlineButtons.length > 0 && (
+                <div className="space-y-1.5">
+                  {inlineButtons.map((btn, i) => (
+                    <div key={i} className="text-center py-2 px-3 bg-gray-700 rounded-lg text-xs font-medium text-blue-400 truncate">
+                      {btn.text} <span className="text-gray-500">&#8599;</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Column 3: Target */}
+        <div className="bg-white border border-gray-200 rounded-xl p-5">
+          <h3 className="text-sm font-semibold text-gray-900 mb-3">Кому надіслати</h3>
+
+          <div className="space-y-2 mb-4">
+            {([
+              { key: 'all' as const, label: 'Всім юзерам', tooltip: 'Надіслати всім юзерам які коли-небудь заходили в бот.' },
+              { key: 'subscribers' as const, label: 'Тільки підписникам', tooltip: 'Надіслати тільки юзерам з активною підпискою.' },
+              { key: 'specific' as const, label: 'Конкретним юзерам', tooltip: 'Надіслати одному або декільком юзерам за Telegram ID.' },
+            ]).map((opt) => (
+              <button key={opt.key} onClick={() => setTarget(opt.key)}
+                className={`w-full px-4 py-2.5 text-sm font-medium rounded-lg cursor-pointer transition-colors text-left inline-flex items-center gap-2 ${
+                  target === opt.key ? 'bg-blue-600 text-white' : 'bg-gray-50 text-gray-600 hover:bg-gray-100 border border-gray-200'
+                }`}>
+                <InfoTooltip content={opt.tooltip} />
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Specific users dropdown */}
+          {target === 'specific' && (
+            <div>
+              <div className="relative" ref={dropdownRef}>
+                <button onClick={() => setShowDropdown(!showDropdown)}
+                  className="w-full flex items-center justify-between px-3 py-2.5 text-sm border border-gray-300 rounded-lg bg-white cursor-pointer hover:border-gray-400 transition-colors">
+                  <span className={selectedUsers.length > 0 ? 'text-gray-700' : 'text-gray-400'}>
+                    {selectedUsers.length > 0 ? `Обрано: ${selectedUsers.length}` : 'Оберіть юзерів...'}
+                  </span>
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"
+                    className={`w-4 h-4 text-gray-400 transition-transform ${showDropdown ? 'rotate-180' : ''}`}>
+                    <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
+                  </svg>
+                </button>
+                {showDropdown && (
+                  <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg">
+                    <div className="p-2 border-b border-gray-100">
+                      <input type="text" value={userSearch} onChange={(e) => setUserSearch(e.target.value)}
+                        placeholder="Пошук..." autoFocus
+                        className="w-full px-3 py-2 text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" />
+                    </div>
+                    <div className="max-h-60 overflow-auto">
+                      {loadingUsers ? (
+                        <p className="px-3 py-3 text-sm text-gray-400 text-center">Завантаження...</p>
+                      ) : userOptions.length === 0 ? (
+                        <p className="px-3 py-3 text-sm text-gray-400 text-center">Юзерів не знайдено</p>
+                      ) : userOptions.map(u => {
+                        const isSelected = selectedUsers.some(s => s.telegram_id === u.telegram_id);
+                        return (
+                          <label key={u.telegram_id}
+                            className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer transition-colors border-b border-gray-50 last:border-0 ${
+                              isSelected ? 'bg-blue-50' : 'hover:bg-gray-50'
+                            }`}>
+                            <input type="checkbox" checked={isSelected} onChange={() => toggleUser(u)}
+                              className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+                            <span className="font-mono text-xs text-gray-500 shrink-0">{u.telegram_id}</span>
+                            <span className="flex-1 text-sm text-gray-700 truncate">{u.username ? `@${u.username}` : '—'}</span>
+                            <span className={`text-xs font-medium shrink-0 ${u.is_subscribed ? 'text-green-600' : 'text-gray-400'}`}>
+                              {u.is_subscribed ? 'Active' : 'Inactive'}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+              {selectedUsers.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {selectedUsers.map(u => (
+                    <span key={u.telegram_id} className="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-100 text-blue-800 text-xs font-medium rounded-full">
+                      {u.username ? `@${u.username}` : u.telegram_id}
+                      <button onClick={() => setSelectedUsers(prev => prev.filter(p => p.telegram_id !== u.telegram_id))}
+                        className="hover:text-blue-600 cursor-pointer text-blue-400">&times;</button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Send button + progress */}
+          <div className="mt-4 space-y-3">
+            <button onClick={handleSend} disabled={!canSend}
+              className="w-full px-4 py-2.5 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-colors">
+              {sending ? 'Відправляю...' : 'Відправити'}
+            </button>
+
+            {progress && !progress.done && (
+              <div className="space-y-1.5">
+                <div className="flex justify-between text-xs text-gray-500">
+                  <span>Надіслано: {progress.sent}{progress.failed > 0 ? ` (помилок: ${progress.failed})` : ''}</span>
+                  <span>{progress.sent + progress.failed} / {progress.total}</span>
+                </div>
+                <div className="w-full bg-gray-200 rounded-full h-2">
+                  <div className="bg-blue-600 h-2 rounded-full transition-all"
+                    style={{ width: `${Math.round(((progress.sent + progress.failed) / progress.total) * 100)}%` }} />
+                </div>
+              </div>
+            )}
+
+            {result && (
+              <div className={`px-3 py-2 rounded-lg text-xs ${result.ok ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                {result.message}
+              </div>
+            )}
+
+            {progress && progress.errors.length > 0 && (
+              <div>
+                <h4 className="text-xs font-semibold text-red-700 mb-1.5">Помилки ({progress.errors.length}):</h4>
+                <div className="max-h-32 overflow-auto space-y-1">
+                  {progress.errors.map((e, i) => (
+                    <div key={i} className="flex gap-2 px-2 py-1.5 bg-red-50 rounded text-xs">
+                      <span className="font-mono text-red-700 shrink-0">{e.telegramId}</span>
+                      <span className="text-red-500 truncate">{e.error}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Video Note Sub-Page ---------- */
+
+function VideoNotePage({ onBack }: { onBack: () => void }) {
+  const [fileId, setFileId] = useState('');
+  const [target, setTarget] = useState<'all' | 'subscribers' | 'specific'>('all');
+  const [selectedUsers, setSelectedUsers] = useState<UserOption[]>([]);
+  const [userSearch, setUserSearch] = useState('');
+  const [userOptions, setUserOptions] = useState<UserOption[]>([]);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const [loadingUsers, setLoadingUsers] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [progress, setProgress] = useState<{ total: number; sent: number; failed: number; done: boolean; errors: { telegramId: number; error: string }[] } | null>(null);
+  const { headers } = useAuth();
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown on click outside
+  useEffect(() => {
+    if (!showDropdown) return;
+    function handleClick(e: MouseEvent) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setShowDropdown(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [showDropdown]);
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, []);
+
+  // Fetch users for dropdown when search changes
+  useEffect(() => {
+    if (target !== 'specific') return;
+    const timer = setTimeout(async () => {
+      setLoadingUsers(true);
+      try {
+        const params = new URLSearchParams({ page: '1', limit: '50' });
+        if (userSearch.trim()) params.set('search', userSearch.trim());
+        const res = await fetch(`/api/users?${params}`, { headers });
+        if (res.ok) {
+          const data = await res.json();
+          setUserOptions(data.users.map((u: { telegram_id: number; username: string | null; is_subscribed: boolean }) => ({
+            telegram_id: u.telegram_id,
+            username: u.username,
+            is_subscribed: u.is_subscribed,
+          })));
+        }
+      } catch { /* ignore */ }
+      setLoadingUsers(false);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [userSearch, target]);
+
+  function toggleUser(user: UserOption) {
+    setSelectedUsers(prev =>
+      prev.some(u => u.telegram_id === user.telegram_id)
+        ? prev.filter(u => u.telegram_id !== user.telegram_id)
+        : [...prev, user]
+    );
+  }
+
+  function removeUser(telegramId: number) {
+    setSelectedUsers(prev => prev.filter(u => u.telegram_id !== telegramId));
+  }
+
+  function startPolling(jobId: string) {
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/broadcast/video-note/progress/${jobId}`, { headers });
+        if (!res.ok) return;
+        const data = await res.json();
+        setProgress(data);
+        if (data.done) {
+          if (pollRef.current) clearInterval(pollRef.current);
+          pollRef.current = null;
+          setSending(false);
+          setResult({
+            ok: true,
+            message: `Розсилка завершена: ${data.sent} надіслано${data.failed ? `, ${data.failed} помилок` : ''} / ${data.total} всього`,
+          });
+        }
+      } catch { /* ignore polling errors */ }
+    }, 1000);
+  }
+
+  async function handleSend() {
+    if (!fileId.trim()) return;
+    if (target === 'specific' && selectedUsers.length === 0) return;
+    setSending(true);
+    setResult(null);
+    setProgress(null);
+
+    try {
+      const res = await fetch('/api/broadcast/video-note', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...headers },
+        body: JSON.stringify({
+          fileId: fileId.trim(),
+          target,
+          telegramIds: target === 'specific'
+            ? selectedUsers.map(u => String(u.telegram_id))
+            : undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setResult({ ok: false, message: data.error ?? 'Failed to send' });
+        setSending(false);
+      } else if (data.jobId) {
+        // Background job started — poll for progress
+        setProgress({ total: data.total, sent: 0, failed: 0, done: false, errors: [] });
+        startPolling(data.jobId);
+      } else {
+        // Instant send (single chat)
+        setResult({ ok: true, message: 'Відправлено!' });
+        setSending(false);
+      }
+    } catch {
+      setResult({ ok: false, message: 'Network error' });
+      setSending(false);
+    }
+  }
+
+  const canSend = fileId.trim() && !sending && (target !== 'specific' || selectedUsers.length > 0);
+
+  return (
+    <div className="overflow-y-auto h-full pb-6">
+      {/* Header */}
+      <div className="flex items-center gap-3 mb-5">
+        <button onClick={onBack} className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg cursor-pointer transition-colors">
+          <BackIcon />
+        </button>
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900">{'\u{1F3A5}'} Відео кружечок</h2>
+          <p className="text-sm text-gray-500">Відправка відео-кружечка юзерам бота</p>
+        </div>
+      </div>
+
+      <div className="flex gap-6">
+      {/* Left column — form */}
+      <div className="max-w-xl pl-6 space-y-6">
+        {/* Instructions */}
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+          <h4 className="text-sm font-semibold text-blue-900 mb-2">Як отримати file_id:</h4>
+          <ol className="text-sm text-blue-800 space-y-1 list-decimal list-inside">
+            <li>Зніми відео кружечок в Telegram</li>
+            <li>Надішли його боту в приватний чат</li>
+            <li>Бот відповість з file_id — скопіюй його</li>
+            <li>Встав file_id в поле нижче</li>
+          </ol>
+        </div>
+
+        {/* File ID input */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">File ID</label>
+          <textarea
+            value={fileId}
+            onChange={(e) => setFileId(e.target.value)}
+            placeholder="Встав file_id від бота..."
+            rows={2}
+            className="w-full px-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono resize-y"
+          />
+        </div>
+
+        {/* Target selection */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">Кому надіслати</label>
+          <div className="flex gap-2 flex-wrap items-center">
+            {([
+              { key: 'all' as const, label: 'Всім юзерам', tooltip: 'Надіслати кружечок всім юзерам які коли-небудь заходили в бот.' },
+              { key: 'subscribers' as const, label: 'Тільки підписникам', tooltip: 'Надіслати тільки юзерам з активною підпискою.' },
+              { key: 'specific' as const, label: 'Конкретним юзерам', tooltip: 'Надіслати одному або декільком юзерам за Telegram ID.' },
+            ]).map((opt) => (
+              <div key={opt.key} className="relative">
+                <button
+                  onClick={() => setTarget(opt.key)}
+                  className={`px-4 py-2 text-sm font-medium rounded-lg cursor-pointer transition-colors inline-flex items-center gap-1.5 ${
+                    target === opt.key
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                >
+                  <InfoTooltip content={opt.tooltip} />
+                  {opt.label}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Specific users picker */}
+        {target === 'specific' && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Обрати юзерів</label>
+
+            <div className="relative" ref={dropdownRef}>
+              {/* Trigger button */}
+              <button
+                onClick={() => setShowDropdown(!showDropdown)}
+                className="w-full flex items-center justify-between px-3 py-2.5 text-sm border border-gray-300 rounded-lg bg-white cursor-pointer hover:border-gray-400 transition-colors"
+              >
+                <span className={selectedUsers.length > 0 ? 'text-gray-700' : 'text-gray-400'}>
+                  {selectedUsers.length > 0
+                    ? `Обрано: ${selectedUsers.length}`
+                    : 'Оберіть юзерів...'}
+                </span>
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"
+                  className={`w-4 h-4 text-gray-400 transition-transform ${showDropdown ? 'rotate-180' : ''}`}>
+                  <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
+                </svg>
+              </button>
+
+              {/* Dropdown */}
+              {showDropdown && (
+                <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg">
+                  {/* Search */}
+                  <div className="p-2 border-b border-gray-100">
+                    <input
+                      type="text"
+                      value={userSearch}
+                      onChange={(e) => setUserSearch(e.target.value)}
+                      placeholder="Пошук..."
+                      autoFocus
+                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+
+                  {/* List */}
+                  <div className="max-h-60 overflow-auto">
+                    {loadingUsers ? (
+                      <p className="px-3 py-3 text-sm text-gray-400 text-center">Завантаження...</p>
+                    ) : userOptions.length === 0 ? (
+                      <p className="px-3 py-3 text-sm text-gray-400 text-center">Юзерів не знайдено</p>
+                    ) : userOptions.map(u => {
+                      const isSelected = selectedUsers.some(s => s.telegram_id === u.telegram_id);
+                      return (
+                        <label key={u.telegram_id}
+                          className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer transition-colors border-b border-gray-50 last:border-0 ${
+                            isSelected ? 'bg-blue-50' : 'hover:bg-gray-50'
+                          }`}>
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleUser(u)}
+                            className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                          />
+                          <span className="font-mono text-xs text-gray-500 w-28 shrink-0">{u.telegram_id}</span>
+                          <span className="flex-1 text-sm text-gray-700 truncate">{u.username ? `@${u.username}` : '—'}</span>
+                          <span className={`text-xs font-medium shrink-0 ${
+                            u.is_subscribed ? 'text-green-600' : 'text-gray-400'
+                          }`}>
+                            {u.is_subscribed ? 'Active' : 'Inactive'}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Selected chips */}
+            {selectedUsers.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                {selectedUsers.map(u => (
+                  <span key={u.telegram_id}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-100 text-blue-800 text-xs font-medium rounded-full">
+                    {u.username ? `@${u.username}` : u.telegram_id}
+                    <button onClick={() => removeUser(u.telegram_id)}
+                      className="hover:text-blue-600 cursor-pointer text-blue-400">&times;</button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Send button */}
+        <button
+          onClick={handleSend}
+          disabled={!canSend}
+          className="w-full px-4 py-2.5 text-sm font-medium text-white bg-blue-600 rounded-lg
+                     hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-colors"
+        >
+          {sending ? 'Відправляю...' : 'Відправити'}
+        </button>
+
+        {/* Progress */}
+        {progress && !progress.done && (
+          <div className="space-y-2">
+            <div className="flex justify-between text-sm text-gray-600">
+              <span>Надіслано: {progress.sent}{progress.failed > 0 ? ` (помилок: ${progress.failed})` : ''}</span>
+              <span>{progress.sent + progress.failed} / {progress.total}</span>
+            </div>
+            <div className="w-full bg-gray-200 rounded-full h-2.5">
+              <div
+                className="bg-blue-600 h-2.5 rounded-full transition-all"
+                style={{ width: `${Math.round(((progress.sent + progress.failed) / progress.total) * 100)}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Result */}
+        {result && (
+          <div className={`px-4 py-3 rounded-lg text-sm ${
+            result.ok ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
+          }`}>
+            {result.message}
+          </div>
+        )}
+      </div>
+
+      {/* Right column — error report (only shown when there are errors) */}
+      {progress && progress.errors.length > 0 && (
+        <div className="flex-1 min-w-[250px]">
+          <div className="bg-white border border-red-200 rounded-xl p-5 sticky top-4">
+            <h3 className="text-sm font-semibold text-red-700 mb-3">
+              Помилки ({progress.errors.length})
+            </h3>
+            <div className="max-h-[400px] overflow-auto space-y-1.5">
+              {progress.errors.map((e, i) => (
+                <div key={i} className="flex gap-2 px-2.5 py-2 bg-red-50 rounded-lg text-xs">
+                  <span className="font-mono text-red-700 shrink-0">{e.telegramId}</span>
+                  <span className="text-red-500">{e.error}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+      </div>
+    </div>
+  );
+}
+
 /* ---------- Main Page ---------- */
 
 export function BroadcastPage() {
@@ -575,6 +1316,14 @@ export function BroadcastPage() {
 
   if (subPage === 'panel') {
     return <PanelPage onBack={() => setSubPage(null)} />;
+  }
+
+  if (subPage === 'bot-broadcast') {
+    return <BotBroadcastPage onBack={() => setSubPage(null)} />;
+  }
+
+  if (subPage === 'video-note') {
+    return <VideoNotePage onBack={() => setSubPage(null)} />;
   }
 
   return (
@@ -586,6 +1335,22 @@ export function BroadcastPage() {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         <button
+          onClick={() => setSubPage('bot-broadcast')}
+          className="text-left p-6 rounded-xl border-2 border-purple-200 hover:border-purple-400 hover:shadow-md transition-all cursor-pointer"
+        >
+          <h3 className="text-lg font-bold text-gray-900 mb-2">Розсилка в бот</h3>
+          <p className="text-sm text-gray-500 leading-relaxed">Масова розсилка повідомлення з inline кнопками всім юзерам бота або по фільтрах</p>
+        </button>
+
+        <button
+          onClick={() => setSubPage('video-note')}
+          className="text-left p-6 rounded-xl border-2 border-pink-200 hover:border-pink-400 hover:shadow-md transition-all cursor-pointer"
+        >
+          <h3 className="text-lg font-bold text-gray-900 mb-2">Відео кружечок</h3>
+          <p className="text-sm text-gray-500 leading-relaxed">Відправка відео-кружечка юзерам бота або в канал</p>
+        </button>
+
+        <button
           onClick={() => setSubPage('panel')}
           className="text-left p-6 rounded-xl border-2 border-blue-200 hover:border-blue-400 hover:shadow-md transition-all cursor-pointer"
         >
@@ -594,26 +1359,6 @@ export function BroadcastPage() {
             Повідомлення з inline кнопками-посиланнями в Men Education Club
           </p>
         </button>
-
-        <div className="p-6 rounded-xl border-2 border-gray-200 opacity-50">
-          <h3 className="text-lg font-bold text-gray-900 mb-2">Розсилка в бот <span className="text-xs font-normal text-gray-400 ml-1">Скоро</span></h3>
-          <p className="text-sm text-gray-500 leading-relaxed">Масова розсилка повідомлення всім юзерам бота або по фільтрах</p>
-        </div>
-
-        <div className="p-6 rounded-xl border-2 border-gray-200 opacity-50">
-          <h3 className="text-lg font-bold text-gray-900 mb-2">Відео кружечок <span className="text-xs font-normal text-gray-400 ml-1">Скоро</span></h3>
-          <p className="text-sm text-gray-500 leading-relaxed">Відправка відео-кружечка в групу або канал</p>
-        </div>
-
-        <div className="p-6 rounded-xl border-2 border-gray-200 opacity-50">
-          <h3 className="text-lg font-bold text-gray-900 mb-2">Фото + текст <span className="text-xs font-normal text-gray-400 ml-1">Скоро</span></h3>
-          <p className="text-sm text-gray-500 leading-relaxed">Відправка фото з підписом та inline кнопками</p>
-        </div>
-
-        <div className="p-6 rounded-xl border-2 border-gray-200 opacity-50">
-          <h3 className="text-lg font-bold text-gray-900 mb-2">Відео + текст <span className="text-xs font-normal text-gray-400 ml-1">Скоро</span></h3>
-          <p className="text-sm text-gray-500 leading-relaxed">Відправка відео з підписом та inline кнопками</p>
-        </div>
       </div>
     </div>
   );
