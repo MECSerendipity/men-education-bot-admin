@@ -23,9 +23,17 @@ function getPrivateChannels(): ChannelConfig[] {
     .filter((c) => c.id !== 0 && !isNaN(c.id));
 }
 
-/** Get just the channel IDs */
+/** Get just the channel IDs (for invite links) */
 export function getPrivateChannelIds(): number[] {
   return getPrivateChannels().map((c) => c.id);
+}
+
+/** Get all channel IDs including kick-only channels (no invite link generated) */
+function getAllKickChannelIds(): number[] {
+  const ids = getPrivateChannelIds();
+  const commentsId = Number(process.env.PRIVATE_CHANNEL_COMMENTS ?? 0);
+  if (commentsId && !isNaN(commentsId)) ids.push(commentsId);
+  return ids;
 }
 
 /** Generate invite links with join request approval for all private channels and send to user */
@@ -95,8 +103,6 @@ export function handleJoinRequest(bot: Telegraf): void {
 
 /** Revoke invite links and kick user from all private channels */
 export async function revokeAccessForUser(bot: Telegraf, telegramId: number): Promise<void> {
-  const channelIds = getPrivateChannelIds();
-
   // Revoke stored invite links via Telegram API
   const revokedLinks = await revokeInviteLinks(telegramId);
   for (const link of revokedLinks) {
@@ -107,8 +113,9 @@ export async function revokeAccessForUser(bot: Telegraf, telegramId: number): Pr
     }
   }
 
-  // Kick user from all channels
-  for (const channelId of channelIds) {
+  // Kick user from all channels (including kick-only channels like comments group)
+  const allKickIds = getAllKickChannelIds();
+  for (const channelId of allKickIds) {
     try {
       await bot.telegram.banChatMember(channelId, telegramId);
       // Unban so user can rejoin later if they resubscribe

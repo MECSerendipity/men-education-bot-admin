@@ -313,7 +313,10 @@ async function handleCallback(req: IncomingMessage, res: ServerResponse, bot: Te
       // Send rules or invite link only for new subscriptions
       if (!isRenewal) {
         await sendRulesOrInvite(bot, payment.telegram_id);
-        // Update reply keyboard — user is now subscribed, show partner button
+        // Don't refresh keyboard here — sendRulesOrInvite sets its own reply keyboard
+        // Menu keyboard will be refreshed after user accepts rules
+      } else {
+        // For renewals, refresh keyboard in case subscription status changed
         await refreshMenuKeyboard(bot, payment.telegram_id, true);
       }
 

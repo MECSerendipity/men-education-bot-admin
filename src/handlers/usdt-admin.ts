@@ -86,6 +86,7 @@ async function handleAdminDecision(
     // Send rules or invite link only for new subscriptions
     if (!isRenewal) {
       await sendRulesOrInvite(bot, payment.telegram_id);
+    } else {
       await refreshMenuKeyboard(bot, payment.telegram_id, true);
     }
 

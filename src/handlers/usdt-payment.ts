@@ -2,7 +2,7 @@ import { Telegraf, type Context } from 'telegraf';
 import { TEXTS } from '../texts/index.js';
 import { getPricesForUser, type PricesSnapshot } from '../services/pricing.js';
 import { type PriceRow } from '../db/prices.js';
-import { createTransaction, updateTransactionStatus, updateTransactionTxHash, hasPendingCryptoTransaction, isFirstApprovedTransaction } from '../db/transactions.js';
+import { createTransaction, updateTransactionStatus, updateTransactionTxHash, hasPendingCryptoTransaction, hasPendingCardTransaction, isFirstApprovedTransaction } from '../db/transactions.js';
 import { getUserByTelegramId } from '../db/users.js';
 import { hasActiveSubscription, getCancelledSubscription } from '../db/subscriptions.js';
 import { formatDate } from '../services/notifications.js';
@@ -80,6 +80,12 @@ async function handleCryptoPayment(ctx: Context, duration: string): Promise<void
   // Block if user already has a pending crypto payment (WaitingConfirmation = hash submitted)
   if (await hasPendingCryptoTransaction(telegramId)) {
     await ctx.reply('У тебе вже є активний USDT платіж. Дочекайся його обробки.');
+    return;
+  }
+
+  // Block if user already has a pending card payment
+  if (await hasPendingCardTransaction(telegramId)) {
+    await ctx.reply('У тебе вже є активний платіж карткою. Скористайся попереднім посиланням або зачекай 10 хвилин.');
     return;
   }
 

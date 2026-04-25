@@ -67,10 +67,17 @@ function buildCancelledText(sub: Subscription): string {
 const ACTIVE_KEYBOARD = {
   inline_keyboard: [
     [{ text: '\u{1F517} Мої посилання в клуб', callback_data: 'sub:my_links' }],
+    [{ text: '\u{2699}\u{FE0F} Керування підпискою', callback_data: 'sub:manage' }],
+  ],
+};
+
+const MANAGE_KEYBOARD = {
+  inline_keyboard: [
     [{ text: '\u{1F4DD} Змінити план', callback_data: 'sub:change_plan' }],
     [{ text: '\u{1F504} Змінити метод оплати', callback_data: 'sub:change_method' }],
     [{ text: '\u{1F4B3} Змінити карту', callback_data: 'sub:change_card' }],
     [{ text: '\u{274C} Скасувати підписку', callback_data: 'sub:cancel' }],
+    [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:back' }],
   ],
 };
 
@@ -83,7 +90,7 @@ const CANCELLED_KEYBOARD = {
 const CANCEL_CONFIRM_KEYBOARD = {
   inline_keyboard: [
     [{ text: '\u{274C} Так, скасувати', callback_data: 'sub:cancel_confirm' }],
-    [{ text: '\u{2B05}\u{FE0F} Ні, повернутись', callback_data: 'sub:back' }],
+    [{ text: '\u{2B05}\u{FE0F} Ні, повернутись', callback_data: 'sub:manage' }],
   ],
 };
 
@@ -109,6 +116,15 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
         ],
       },
     });
+  });
+
+  // Manage subscription — show management buttons
+  bot.action('sub:manage', async (ctx) => {
+    await ctx.answerCbQuery();
+    const activeSub = await getActiveSubscription(ctx.from!.id);
+    if (!activeSub) return;
+
+    await ctx.editMessageText(buildActiveText(activeSub), { reply_markup: MANAGE_KEYBOARD });
   });
 
   // My club links
@@ -153,7 +169,7 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
           reply_markup: {
             inline_keyboard: [
               [{ text: '\u{26A1} Змінити на USDT', callback_data: 'sub:switch_to_crypto' }],
-              [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:back' }],
+              [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:manage' }],
             ],
           },
         },
@@ -171,7 +187,7 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
           reply_markup: {
             inline_keyboard: [
               [{ text: '\u{1F4B3} Додати картку', callback_data: 'sub:switch_to_card' }],
-              [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:back' }],
+              [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:manage' }],
             ],
           },
         },
@@ -222,7 +238,7 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
         {
           reply_markup: {
             inline_keyboard: [
-              [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:back' }],
+              [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:manage' }],
             ],
           },
         },
@@ -256,7 +272,7 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
         {
           reply_markup: {
             inline_keyboard: [
-              [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:back' }],
+              [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:manage' }],
             ],
           },
         },
@@ -357,7 +373,7 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
       ? []
       : [[{ text: '\u{2705} Змінити', callback_data: `sub:set_plan:${showDuration}` }]];
 
-    const backCallback = isCurrentPlan ? 'sub:back' : 'sub:change_plan';
+    const backCallback = isCurrentPlan ? 'sub:manage' : 'sub:change_plan';
 
     const header = isCurrentPlan ? '\u{1F4DD} Зміна плану\n\nПоточна підписка:\n\n' : '\u{1F4DD} Зміна плану\n\n';
 
@@ -404,7 +420,7 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
       await ctx.editMessageText('Не вдалося змінити план. Спробуй ще раз.', {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:back' }],
+            [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:manage' }],
           ],
         },
       });
@@ -449,7 +465,7 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
         {
           reply_markup: {
             inline_keyboard: [
-              [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:back' }],
+              [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:manage' }],
             ],
           },
         },
@@ -468,7 +484,7 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
         reply_markup: {
           inline_keyboard: [
             [{ text: '\u{1F4B3} Додати нову картку', callback_data: 'sub:new_card' }],
-            [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:back' }],
+            [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:manage' }],
           ],
         },
       },
@@ -486,7 +502,7 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
         {
           reply_markup: {
             inline_keyboard: [
-              [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:back' }],
+              [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:manage' }],
             ],
           },
         },
@@ -520,7 +536,7 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
         {
           reply_markup: {
             inline_keyboard: [
-              [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:back' }],
+              [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:manage' }],
             ],
           },
         },

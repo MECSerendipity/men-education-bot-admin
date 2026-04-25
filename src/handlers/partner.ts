@@ -1,6 +1,6 @@
 import { Telegraf } from 'telegraf';
 import { TEXTS } from '../texts/index.js';
-import { hasActiveSubscription } from '../db/subscriptions.js';
+import { hasActiveSubscription, getCancelledSubscription } from '../db/subscriptions.js';
 import { getOrCreateRefCode, getPartnerStats, getPartnerBalance, getPartnerConfig, getPartnerReferrals, createWithdrawalRequest, getPendingWithdrawal } from '../db/partners.js';
 import { getUserByTelegramId } from '../db/users.js';
 import { USDT, SUPPORT_URL, PARTNER } from '../config.js';
@@ -24,13 +24,16 @@ async function getBotUsername(bot: Telegraf): Promise<string> {
 async function requireSubscription(ctx: any): Promise<boolean> {
   const isSubscribed = await hasActiveSubscription(ctx.from.id);
   if (!isSubscribed) {
+    const cancelledSub = await getCancelledSubscription(ctx.from.id);
+    const button = cancelledSub
+      ? { text: '\u{2705} Відновити підписку', callback_data: 'sub:reactivate' }
+      : { text: 'Оформити підписку', callback_data: 'subscription' };
+
     await ctx.editMessageText(
       'Реферальна система доступна тільки для користувачів з активною підпискою.',
       {
         reply_markup: {
-          inline_keyboard: [
-            [{ text: 'Оформити підписку', callback_data: 'subscription' }],
-          ],
+          inline_keyboard: [[button]],
         },
       },
     );
@@ -47,13 +50,16 @@ export function registerPartnerHandler(bot: Telegraf) {
 
     const isSubscribed = await hasActiveSubscription(telegramId);
     if (!isSubscribed) {
+      const cancelledSub = await getCancelledSubscription(telegramId);
+      const button = cancelledSub
+        ? { text: '\u{2705} Відновити підписку', callback_data: 'sub:reactivate' }
+        : { text: 'Оформити підписку', callback_data: 'subscription' };
+
       await ctx.reply(
         'Реферальна система доступна тільки для користувачів з активною підпискою.',
         {
           reply_markup: {
-            inline_keyboard: [
-              [{ text: 'Оформити підписку', callback_data: 'subscription' }],
-            ],
+            inline_keyboard: [[button]],
           },
         },
       );

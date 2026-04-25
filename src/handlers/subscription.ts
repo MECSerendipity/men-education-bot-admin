@@ -2,7 +2,7 @@ import { Telegraf, type Context } from 'telegraf';
 import { buildTariffKeyboard, paymentMethodKeyboard } from '../keyboards/index.js';
 import { TEXTS } from '../texts/index.js';
 import { getPricesForUser } from '../services/pricing.js';
-import { createTransaction, hasPendingCardTransaction, updateTransactionStatus, updateTransactionCard, updateTransactionDeclineReason } from '../db/transactions.js';
+import { createTransaction, hasPendingCardTransaction, hasPendingCryptoTransaction, updateTransactionStatus, updateTransactionCard, updateTransactionDeclineReason } from '../db/transactions.js';
 import { hasActiveSubscription, getCancelledSubscription, activateSubscription, type Subscription } from '../db/subscriptions.js';
 import { formatDate, planDisplayName, buildPaymentSuccessMessage, buildRetryFailedMessage } from '../services/notifications.js';
 import { sendPaymentNotification } from '../services/notifications.js';
@@ -69,6 +69,11 @@ async function handleCardPayment(ctx: Context, duration: string): Promise<void> 
 
   if (await hasPendingCardTransaction(telegramId)) {
     await ctx.reply('У тебе вже є активний платіж. Скористайся попереднім посиланням або зачекай 10 хвилин.');
+    return;
+  }
+
+  if (await hasPendingCryptoTransaction(telegramId)) {
+    await ctx.reply('У тебе вже є активний USDT платіж. Дочекайся його обробки.');
     return;
   }
 
