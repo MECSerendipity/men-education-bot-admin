@@ -134,6 +134,18 @@ export async function hasPendingCardTransaction(telegramId: number): Promise<boo
   return result.rows.length > 0;
 }
 
+/** Get stale Pending card transactions (older than 10 minutes) */
+export async function getStalePendingCardTransactions(): Promise<Transaction[]> {
+  const result = await db.query(
+    `SELECT * FROM transactions
+     WHERE method = 'card'
+       AND status IN ('Pending', 'WaitingAuthComplete')
+       AND created_at < NOW() - INTERVAL '30 minutes'
+     ORDER BY created_at ASC`,
+  );
+  return result.rows;
+}
+
 /** Link a transaction to a subscription */
 export async function linkTransactionToSubscription(transactionId: number, subscriptionId: number): Promise<void> {
   await db.query(

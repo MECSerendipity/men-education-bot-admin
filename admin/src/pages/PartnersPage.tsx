@@ -56,6 +56,13 @@ interface Partner {
   total_earned_usdt: number;
 }
 
+interface PartnerTotals {
+  total_balance_uah: number;
+  total_balance_usdt: number;
+  total_withdrawn_uah: number;
+  total_withdrawn_usdt: number;
+}
+
 interface PartnerConfig {
   first_enabled: string;
   first_percent: string;
@@ -368,6 +375,7 @@ function TransactionsTab() {
 
 function BalancesTab() {
   const [partners, setPartners] = useState<Partner[]>([]);
+  const [totals, setTotals] = useState<PartnerTotals | null>(null);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
@@ -385,6 +393,7 @@ function BalancesTab() {
       setPartners(data.partners ?? []);
       setTotal(data.total ?? 0);
       setTotalPages(data.totalPages ?? 1);
+      if (data.totals) setTotals(data.totals);
     } catch { setPartners([]); }
     setLoading(false);
   }, [page, search]);
@@ -392,8 +401,26 @@ function BalancesTab() {
   useEffect(() => { fetchData(); }, [fetchData]);
   useEffect(() => { setPage(1); }, [search]);
 
+  const fmt = (v: number | string) => Number(v).toFixed(2);
+
   return (
     <div className="flex flex-col h-full">
+      {/* Summary cards */}
+      {totals && (
+        <div className="grid grid-cols-2 gap-3 mb-4 max-w-lg">
+          <div className="bg-gradient-to-br from-red-50 to-orange-50 border border-red-200 rounded-xl px-5 py-4">
+            <p className="text-xs font-medium text-red-500 uppercase tracking-wide mb-2">Загальна сума до виплати</p>
+            <p className="text-xl font-bold text-red-700">{fmt(totals.total_balance_uah)} <span className="text-sm font-medium">UAH</span></p>
+            <p className="text-lg font-bold text-red-600">{fmt(totals.total_balance_usdt)} <span className="text-sm font-medium">USDT</span></p>
+          </div>
+          <div className="bg-gradient-to-br from-green-50 to-emerald-50 border border-green-200 rounded-xl px-5 py-4">
+            <p className="text-xs font-medium text-green-600 uppercase tracking-wide mb-2">Загально виплачена сума</p>
+            <p className="text-xl font-bold text-green-700">{fmt(totals.total_withdrawn_uah)} <span className="text-sm font-medium">UAH</span></p>
+            <p className="text-lg font-bold text-green-600">{fmt(totals.total_withdrawn_usdt)} <span className="text-sm font-medium">USDT</span></p>
+          </div>
+        </div>
+      )}
+
       {/* Search */}
       <div className="relative mb-3">
         <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">

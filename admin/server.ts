@@ -131,10 +131,10 @@ app.get<{
       const params: unknown[] = [];
       let paramIndex = 1;
 
-      // Search by username, first_name, last_name, telegram_id or id (all CONTAINS)
+      // Search by telegram_id, username, first_name (all CONTAINS)
       if (search) {
         conditions.push(
-          `(u.id::text ILIKE $${paramIndex} OR u.telegram_id::text ILIKE $${paramIndex} OR u.username ILIKE $${paramIndex} OR u.first_name ILIKE $${paramIndex} OR u.last_name ILIKE $${paramIndex} OR u.email ILIKE $${paramIndex})`
+          `(u.telegram_id::text ILIKE $${paramIndex} OR u.username ILIKE $${paramIndex} OR u.first_name ILIKE $${paramIndex} OR u.last_name ILIKE $${paramIndex})`
         );
         params.push(`%${search}%`);
         paramIndex += 1;
@@ -161,7 +161,7 @@ app.get<{
       const searchParams: unknown[] = [];
       if (search) {
         searchConditions.push(
-          `(u.id::text ILIKE $1 OR u.telegram_id::text ILIKE $1 OR u.username ILIKE $1 OR u.first_name ILIKE $1 OR u.last_name ILIKE $1 OR u.email ILIKE $1)`
+          `(u.telegram_id::text ILIKE $1 OR u.username ILIKE $1 OR u.first_name ILIKE $1 OR u.last_name ILIKE $1)`
         );
         searchParams.push(`%${search}%`);
       }
@@ -414,7 +414,7 @@ app.get<{
 
       if (search) {
         conditions.push(
-          `(s.telegram_id::text ILIKE $${paramIndex} OR u.username ILIKE $${paramIndex} OR u.first_name ILIKE $${paramIndex} OR u.last_name ILIKE $${paramIndex})`
+          `(s.id::text ILIKE $${paramIndex} OR s.telegram_id::text ILIKE $${paramIndex} OR u.username ILIKE $${paramIndex})`
         );
         params.push(`%${search}%`);
         paramIndex += 1;
@@ -433,7 +433,7 @@ app.get<{
       const searchParams: unknown[] = [];
       if (search) {
         searchConditions.push(
-          `(s.telegram_id::text ILIKE $1 OR u.username ILIKE $1 OR u.first_name ILIKE $1 OR u.last_name ILIKE $1)`
+          `(s.id::text ILIKE $1 OR s.telegram_id::text ILIKE $1 OR u.username ILIKE $1)`
         );
         searchParams.push(`%${search}%`);
       }
@@ -536,7 +536,7 @@ app.get<{
 
       if (search) {
         conditions.push(
-          `(t.telegram_id::text ILIKE $${paramIndex} OR t.order_reference ILIKE $${paramIndex} OR t.tx_hash ILIKE $${paramIndex} OR u.username ILIKE $${paramIndex} OR u.first_name ILIKE $${paramIndex})`
+          `(t.id::text ILIKE $${paramIndex} OR t.subscription_id::text ILIKE $${paramIndex} OR t.telegram_id::text ILIKE $${paramIndex} OR u.username ILIKE $${paramIndex})`
         );
         params.push(`%${search}%`);
         paramIndex += 1;
@@ -555,7 +555,7 @@ app.get<{
       const searchParams: unknown[] = [];
       if (search) {
         searchConditions.push(
-          `(t.telegram_id::text ILIKE $1 OR t.order_reference ILIKE $1 OR t.tx_hash ILIKE $1 OR u.username ILIKE $1 OR u.first_name ILIKE $1)`
+          `(t.id::text ILIKE $1 OR t.subscription_id::text ILIKE $1 OR t.telegram_id::text ILIKE $1 OR u.username ILIKE $1)`
         );
         searchParams.push(`%${search}%`);
       }
@@ -940,7 +940,7 @@ const broadcastJobs = new Map<string, BroadcastJob>();
 app.post<{
   Body: {
     fileId: string;
-    target: 'all' | 'subscribers' | 'specific';
+    target: 'all' | 'subscribers' | 'cancelled_in_club' | 'expired' | 'never_subscribed' | 'specific';
     telegramIds?: string[];
   };
 }>(
@@ -966,7 +966,16 @@ app.post<{
           return reply.status(400).send({ error: 'No valid Telegram IDs provided' });
         }
       } else if (target === 'subscribers') {
-        const result = await dbPool.query(`SELECT telegram_id FROM users WHERE is_subscribed = TRUE`);
+        const result = await dbPool.query(`SELECT telegram_id FROM subscriptions WHERE status = 'Active'`);
+        telegramIds = result.rows.map((r: { telegram_id: number }) => Number(r.telegram_id));
+      } else if (target === 'cancelled_in_club') {
+        const result = await dbPool.query(`SELECT telegram_id FROM subscriptions WHERE status = 'Cancelled' AND expires_at > NOW()`);
+        telegramIds = result.rows.map((r: { telegram_id: number }) => Number(r.telegram_id));
+      } else if (target === 'expired') {
+        const result = await dbPool.query(`SELECT telegram_id FROM subscriptions WHERE status IN ('Cancelled', 'Expired') AND expires_at <= NOW()`);
+        telegramIds = result.rows.map((r: { telegram_id: number }) => Number(r.telegram_id));
+      } else if (target === 'never_subscribed') {
+        const result = await dbPool.query(`SELECT telegram_id FROM users WHERE telegram_id NOT IN (SELECT telegram_id FROM subscriptions)`);
         telegramIds = result.rows.map((r: { telegram_id: number }) => Number(r.telegram_id));
       } else {
         const result = await dbPool.query(`SELECT telegram_id FROM users`);
@@ -1132,7 +1141,7 @@ app.post(
 app.post<{
   Body: {
     text: string;
-    target: 'all' | 'subscribers' | 'specific';
+    target: 'all' | 'subscribers' | 'cancelled_in_club' | 'expired' | 'never_subscribed' | 'specific';
     telegramIds?: string[];
     buttons?: { text: string; url: string; row: number }[];
     mediaType?: 'photo' | 'video' | 'document';
@@ -1161,7 +1170,16 @@ app.post<{
           return reply.status(400).send({ error: 'No valid Telegram IDs provided' });
         }
       } else if (target === 'subscribers') {
-        const result = await dbPool.query(`SELECT telegram_id FROM users WHERE is_subscribed = TRUE`);
+        const result = await dbPool.query(`SELECT telegram_id FROM subscriptions WHERE status = 'Active'`);
+        telegramIds = result.rows.map((r: { telegram_id: number }) => Number(r.telegram_id));
+      } else if (target === 'cancelled_in_club') {
+        const result = await dbPool.query(`SELECT telegram_id FROM subscriptions WHERE status = 'Cancelled' AND expires_at > NOW()`);
+        telegramIds = result.rows.map((r: { telegram_id: number }) => Number(r.telegram_id));
+      } else if (target === 'expired') {
+        const result = await dbPool.query(`SELECT telegram_id FROM subscriptions WHERE status IN ('Cancelled', 'Expired') AND expires_at <= NOW()`);
+        telegramIds = result.rows.map((r: { telegram_id: number }) => Number(r.telegram_id));
+      } else if (target === 'never_subscribed') {
+        const result = await dbPool.query(`SELECT telegram_id FROM users WHERE telegram_id NOT IN (SELECT telegram_id FROM subscriptions)`);
         telegramIds = result.rows.map((r: { telegram_id: number }) => Number(r.telegram_id));
       } else {
         const result = await dbPool.query(`SELECT telegram_id FROM users`);
@@ -1406,7 +1424,7 @@ app.get<{
 
       if (search) {
         conditions.push(
-          `(r.referrer_id::text ILIKE $${paramIndex} OR r.referred_id::text ILIKE $${paramIndex} OR u1.username ILIKE $${paramIndex} OR u2.username ILIKE $${paramIndex})`
+          `(r.id::text ILIKE $${paramIndex} OR r.referrer_id::text ILIKE $${paramIndex} OR r.referred_id::text ILIKE $${paramIndex} OR u1.username ILIKE $${paramIndex} OR u2.username ILIKE $${paramIndex})`
         );
         params.push(`%${search}%`);
         paramIndex += 1;
@@ -1434,7 +1452,7 @@ app.get<{
       const searchParams: unknown[] = [];
       if (search) {
         searchConditions.push(
-          `(r.referrer_id::text ILIKE $1 OR r.referred_id::text ILIKE $1 OR u1.username ILIKE $1 OR u2.username ILIKE $1)`
+          `(r.id::text ILIKE $1 OR r.referrer_id::text ILIKE $1 OR r.referred_id::text ILIKE $1 OR u1.username ILIKE $1 OR u2.username ILIKE $1)`
         );
         searchParams.push(`%${search}%`);
       }
@@ -1501,7 +1519,7 @@ app.get<{
 
       if (search) {
         conditions.push(
-          `(pt.partner_id::text ILIKE $${paramIndex} OR u1.username ILIKE $${paramIndex} OR u2.username ILIKE $${paramIndex})`
+          `(pt.id::text ILIKE $${paramIndex} OR pt.transaction_id::text ILIKE $${paramIndex} OR pt.partner_id::text ILIKE $${paramIndex} OR u1.username ILIKE $${paramIndex})`
         );
         params.push(`%${search}%`);
         paramIndex += 1;
@@ -1573,7 +1591,7 @@ app.get<{
 
       if (search) {
         conditions.push(
-          `(u.telegram_id::text ILIKE $${paramIndex} OR u.username ILIKE $${paramIndex} OR u.first_name ILIKE $${paramIndex})`
+          `(u.id::text ILIKE $${paramIndex} OR u.telegram_id::text ILIKE $${paramIndex} OR u.username ILIKE $${paramIndex})`
         );
         params.push(`%${search}%`);
         paramIndex += 1;
@@ -1581,13 +1599,24 @@ app.get<{
 
       const where = `WHERE ${conditions.join(' AND ')}`;
 
-      const countResult = await dbPool.query(
-        `SELECT COUNT(*) FROM users u
-         LEFT JOIN partner_accounts pb ON pb.telegram_id = u.telegram_id
-         ${where}`,
-        params,
-      );
+      const [countResult, totalsResult] = await Promise.all([
+        dbPool.query(
+          `SELECT COUNT(*) FROM users u
+           LEFT JOIN partner_accounts pb ON pb.telegram_id = u.telegram_id
+           ${where}`,
+          params,
+        ),
+        dbPool.query(
+          `SELECT
+             COALESCE(SUM(balance_uah), 0) AS total_balance_uah,
+             COALESCE(SUM(balance_usdt), 0) AS total_balance_usdt,
+             COALESCE((SELECT SUM(amount) FROM partner_transactions WHERE type = 'withdrawal' AND status = 'approved' AND currency = 'UAH'), 0) AS total_withdrawn_uah,
+             COALESCE((SELECT SUM(amount) FROM partner_transactions WHERE type = 'withdrawal' AND status = 'approved' AND currency = 'USDT'), 0) AS total_withdrawn_usdt
+           FROM partner_accounts`,
+        ),
+      ]);
       const total = Number(countResult.rows[0].count);
+      const totals = totalsResult.rows[0];
 
       const dataResult = await dbPool.query(
         `SELECT u.id, u.telegram_id, u.username, u.first_name, u.ref_code,
@@ -1606,7 +1635,7 @@ app.get<{
         [...params, limit, offset],
       );
 
-      return { partners: dataResult.rows, total, page, limit, totalPages: Math.ceil(total / limit) };
+      return { partners: dataResult.rows, total, page, limit, totalPages: Math.ceil(total / limit), totals };
     } catch (err) {
       app.log.error(err, 'Failed to fetch partner balances');
       return reply.status(500).send({ error: 'Failed to load partner balances' });

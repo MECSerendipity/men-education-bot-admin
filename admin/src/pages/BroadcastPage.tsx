@@ -563,40 +563,49 @@ function PanelPage({ onBack }: { onBack: () => void }) {
 
 /* ---------- Shared Types ---------- */
 
+type BroadcastTarget = 'all' | 'subscribers' | 'cancelled_in_club' | 'expired' | 'never_subscribed' | 'specific';
+
 interface UserOption {
   telegram_id: number;
   username: string | null;
   is_subscribed: boolean;
 }
 
-/* ---------- Bot Broadcast Sub-Page ---------- */
-
-interface InlineBtn {
-  text: string;
-  url: string;
-  row: number;
+interface BroadcastProgress {
+  total: number;
+  sent: number;
+  failed: number;
+  done: boolean;
+  errors: { telegramId: number; error: string }[];
 }
 
-function BotBroadcastPage({ onBack }: { onBack: () => void }) {
-  const [text, setText] = useState('');
-  const [target, setTarget] = useState<'all' | 'subscribers' | 'specific'>('all');
-  const [selectedUsers, setSelectedUsers] = useState<UserOption[]>([]);
+const TARGET_OPTIONS: { key: BroadcastTarget; label: string; tooltip: string }[] = [
+  { key: 'all', label: 'Всім юзерам', tooltip: 'Надіслати всім юзерам які коли-небудь заходили в бот.' },
+  { key: 'subscribers', label: 'Тільки підписникам', tooltip: 'Юзери з активною підпискою, які не скасовували.' },
+  { key: 'cancelled_in_club', label: 'Скасували, але ще в клубі', tooltip: 'Юзери які скасували підписку, але термін ще не закінчився - вони ще мають доступ.' },
+  { key: 'expired', label: 'Колишні підписники', tooltip: 'Юзери які мали підписку раніше, але вона вже закінчилась - доступу немає.' },
+  { key: 'never_subscribed', label: 'Ніколи не підписувались', tooltip: 'Юзери які заходили в бот, але ніколи не оформлювали підписку.' },
+  { key: 'specific', label: 'Конкретним юзерам', tooltip: 'Надіслати одному або декільком юзерам за Telegram ID.' },
+];
+
+/* ---------- Target Selector (shared) ---------- */
+
+function TargetSelector({ target, onTargetChange, selectedUsers, onSelectedUsersChange, sending, onSend, canSend, progress, result }: {
+  target: BroadcastTarget;
+  onTargetChange: (t: BroadcastTarget) => void;
+  selectedUsers: UserOption[];
+  onSelectedUsersChange: (users: UserOption[]) => void;
+  sending: boolean;
+  onSend: () => void;
+  canSend: boolean;
+  progress: BroadcastProgress | null;
+  result: { ok: boolean; message: string } | null;
+}) {
   const [userSearch, setUserSearch] = useState('');
   const [userOptions, setUserOptions] = useState<UserOption[]>([]);
   const [showDropdown, setShowDropdown] = useState(false);
   const [loadingUsers, setLoadingUsers] = useState(false);
-  const [inlineButtons, setInlineButtons] = useState<InlineBtn[]>([]);
-  const [newBtnText, setNewBtnText] = useState('');
-  const [newBtnUrl, setNewBtnUrl] = useState('');
-  const [mediaType, setMediaType] = useState<'none' | 'photo' | 'video' | 'document'>('none');
-  const [mediaFileId, setMediaFileId] = useState('');
-  const [mediaFilename, setMediaFilename] = useState('');
-  const [uploading, setUploading] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
-  const [progress, setProgress] = useState<{ total: number; sent: number; failed: number; done: boolean; errors: { telegramId: number; error: string }[] } | null>(null);
   const { headers } = useAuth();
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -607,10 +616,6 @@ function BotBroadcastPage({ onBack }: { onBack: () => void }) {
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
   }, [showDropdown]);
-
-  useEffect(() => {
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, []);
 
   useEffect(() => {
     if (target !== 'specific') return;
@@ -633,9 +638,162 @@ function BotBroadcastPage({ onBack }: { onBack: () => void }) {
   }, [userSearch, target]);
 
   function toggleUser(user: UserOption) {
-    setSelectedUsers(prev => prev.some(u => u.telegram_id === user.telegram_id)
-      ? prev.filter(u => u.telegram_id !== user.telegram_id) : [...prev, user]);
+    onSelectedUsersChange(
+      selectedUsers.some(u => u.telegram_id === user.telegram_id)
+        ? selectedUsers.filter(u => u.telegram_id !== user.telegram_id)
+        : [...selectedUsers, user]
+    );
   }
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl p-5">
+      <h3 className="text-sm font-semibold text-gray-900 mb-3">Кому надіслати</h3>
+
+      <div className="space-y-2 mb-4">
+        {TARGET_OPTIONS.map((opt) => (
+          <button key={opt.key} onClick={() => onTargetChange(opt.key)}
+            className={`w-full px-4 py-2.5 text-sm font-medium rounded-lg cursor-pointer transition-colors text-left inline-flex items-center gap-2 ${
+              target === opt.key ? 'bg-blue-600 text-white' : 'bg-gray-50 text-gray-600 hover:bg-gray-100 border border-gray-200'
+            }`}>
+            <InfoTooltip content={opt.tooltip} />
+            {opt.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Specific users dropdown */}
+      {target === 'specific' && (
+        <div>
+          <div className="relative" ref={dropdownRef}>
+            <button onClick={() => setShowDropdown(!showDropdown)}
+              className="w-full flex items-center justify-between px-3 py-2.5 text-sm border border-gray-300 rounded-lg bg-white cursor-pointer hover:border-gray-400 transition-colors">
+              <span className={selectedUsers.length > 0 ? 'text-gray-700' : 'text-gray-400'}>
+                {selectedUsers.length > 0 ? `Обрано: ${selectedUsers.length}` : 'Оберіть юзерів...'}
+              </span>
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"
+                className={`w-4 h-4 text-gray-400 transition-transform ${showDropdown ? 'rotate-180' : ''}`}>
+                <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
+              </svg>
+            </button>
+            {showDropdown && (
+              <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg">
+                <div className="p-2 border-b border-gray-100">
+                  <input type="text" value={userSearch} onChange={(e) => setUserSearch(e.target.value)}
+                    placeholder="Пошук..." autoFocus
+                    className="w-full px-3 py-2 text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" />
+                </div>
+                <div className="max-h-60 overflow-auto">
+                  {loadingUsers ? (
+                    <p className="px-3 py-3 text-sm text-gray-400 text-center">Завантаження...</p>
+                  ) : userOptions.length === 0 ? (
+                    <p className="px-3 py-3 text-sm text-gray-400 text-center">Юзерів не знайдено</p>
+                  ) : userOptions.map(u => {
+                    const isSelected = selectedUsers.some(s => s.telegram_id === u.telegram_id);
+                    return (
+                      <label key={u.telegram_id}
+                        className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer transition-colors border-b border-gray-50 last:border-0 ${
+                          isSelected ? 'bg-blue-50' : 'hover:bg-gray-50'
+                        }`}>
+                        <input type="checkbox" checked={isSelected} onChange={() => toggleUser(u)}
+                          className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
+                        <span className="font-mono text-xs text-gray-500 shrink-0">{u.telegram_id}</span>
+                        <span className="flex-1 text-sm text-gray-700 truncate">{u.username ? `@${u.username}` : '—'}</span>
+                        <span className={`text-xs font-medium shrink-0 ${u.is_subscribed ? 'text-green-600' : 'text-gray-400'}`}>
+                          {u.is_subscribed ? 'Active' : 'Inactive'}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+          {selectedUsers.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {selectedUsers.map(u => (
+                <span key={u.telegram_id} className="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-100 text-blue-800 text-xs font-medium rounded-full">
+                  {u.username ? `@${u.username}` : u.telegram_id}
+                  <button onClick={() => onSelectedUsersChange(selectedUsers.filter(p => p.telegram_id !== u.telegram_id))}
+                    className="hover:text-blue-600 cursor-pointer text-blue-400">&times;</button>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Send button + progress */}
+      <div className="mt-4 space-y-3">
+        <button onClick={onSend} disabled={!canSend}
+          className="w-full px-4 py-2.5 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-colors">
+          {sending ? 'Відправляю...' : 'Відправити'}
+        </button>
+
+        {progress && !progress.done && (
+          <div className="space-y-1.5">
+            <div className="flex justify-between text-xs text-gray-500">
+              <span>Надіслано: {progress.sent}{progress.failed > 0 ? ` (помилок: ${progress.failed})` : ''}</span>
+              <span>{progress.sent + progress.failed} / {progress.total}</span>
+            </div>
+            <div className="w-full bg-gray-200 rounded-full h-2">
+              <div className="bg-blue-600 h-2 rounded-full transition-all"
+                style={{ width: `${Math.round(((progress.sent + progress.failed) / progress.total) * 100)}%` }} />
+            </div>
+          </div>
+        )}
+
+        {result && (
+          <div className={`px-3 py-2 rounded-lg text-xs ${result.ok ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+            {result.message}
+          </div>
+        )}
+
+        {progress && progress.errors.length > 0 && (
+          <div>
+            <h4 className="text-xs font-semibold text-red-700 mb-1.5">Помилки ({progress.errors.length}):</h4>
+            <div className="max-h-32 overflow-auto space-y-1">
+              {progress.errors.map((e, i) => (
+                <div key={i} className="flex gap-2 px-2 py-1.5 bg-red-50 rounded text-xs">
+                  <span className="font-mono text-red-700 shrink-0">{e.telegramId}</span>
+                  <span className="text-red-500 truncate">{e.error}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Bot Broadcast Sub-Page ---------- */
+
+interface InlineBtn {
+  text: string;
+  url: string;
+  row: number;
+}
+
+function BotBroadcastPage({ onBack }: { onBack: () => void }) {
+  const [text, setText] = useState('');
+  const [target, setTarget] = useState<BroadcastTarget>('all');
+  const [selectedUsers, setSelectedUsers] = useState<UserOption[]>([]);
+  const [inlineButtons, setInlineButtons] = useState<InlineBtn[]>([]);
+  const [newBtnText, setNewBtnText] = useState('');
+  const [newBtnUrl, setNewBtnUrl] = useState('');
+  const [mediaType, setMediaType] = useState<'none' | 'photo' | 'video' | 'document'>('none');
+  const [mediaFileId, setMediaFileId] = useState('');
+  const [mediaFilename, setMediaFilename] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [progress, setProgress] = useState<BroadcastProgress | null>(null);
+  const { headers } = useAuth();
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, []);
 
   function addButton() {
     if (!newBtnText.trim() || !newBtnUrl.trim()) return;
@@ -707,7 +865,7 @@ function BotBroadcastPage({ onBack }: { onBack: () => void }) {
     }
   }
 
-  const canSend = text.trim() && !sending && (target !== 'specific' || selectedUsers.length > 0);
+  const canSend = !!(text.trim() && !sending && (target !== 'specific' || selectedUsers.length > 0));
 
   return (
     <div className="overflow-y-auto h-full pb-6">
@@ -840,127 +998,12 @@ function BotBroadcastPage({ onBack }: { onBack: () => void }) {
         </div>
 
         {/* Column 3: Target */}
-        <div className="bg-white border border-gray-200 rounded-xl p-5">
-          <h3 className="text-sm font-semibold text-gray-900 mb-3">Кому надіслати</h3>
-
-          <div className="space-y-2 mb-4">
-            {([
-              { key: 'all' as const, label: 'Всім юзерам', tooltip: 'Надіслати всім юзерам які коли-небудь заходили в бот.' },
-              { key: 'subscribers' as const, label: 'Тільки підписникам', tooltip: 'Надіслати тільки юзерам з активною підпискою.' },
-              { key: 'specific' as const, label: 'Конкретним юзерам', tooltip: 'Надіслати одному або декільком юзерам за Telegram ID.' },
-            ]).map((opt) => (
-              <button key={opt.key} onClick={() => setTarget(opt.key)}
-                className={`w-full px-4 py-2.5 text-sm font-medium rounded-lg cursor-pointer transition-colors text-left inline-flex items-center gap-2 ${
-                  target === opt.key ? 'bg-blue-600 text-white' : 'bg-gray-50 text-gray-600 hover:bg-gray-100 border border-gray-200'
-                }`}>
-                <InfoTooltip content={opt.tooltip} />
-                {opt.label}
-              </button>
-            ))}
-          </div>
-
-          {/* Specific users dropdown */}
-          {target === 'specific' && (
-            <div>
-              <div className="relative" ref={dropdownRef}>
-                <button onClick={() => setShowDropdown(!showDropdown)}
-                  className="w-full flex items-center justify-between px-3 py-2.5 text-sm border border-gray-300 rounded-lg bg-white cursor-pointer hover:border-gray-400 transition-colors">
-                  <span className={selectedUsers.length > 0 ? 'text-gray-700' : 'text-gray-400'}>
-                    {selectedUsers.length > 0 ? `Обрано: ${selectedUsers.length}` : 'Оберіть юзерів...'}
-                  </span>
-                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"
-                    className={`w-4 h-4 text-gray-400 transition-transform ${showDropdown ? 'rotate-180' : ''}`}>
-                    <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
-                  </svg>
-                </button>
-                {showDropdown && (
-                  <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg">
-                    <div className="p-2 border-b border-gray-100">
-                      <input type="text" value={userSearch} onChange={(e) => setUserSearch(e.target.value)}
-                        placeholder="Пошук..." autoFocus
-                        className="w-full px-3 py-2 text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" />
-                    </div>
-                    <div className="max-h-60 overflow-auto">
-                      {loadingUsers ? (
-                        <p className="px-3 py-3 text-sm text-gray-400 text-center">Завантаження...</p>
-                      ) : userOptions.length === 0 ? (
-                        <p className="px-3 py-3 text-sm text-gray-400 text-center">Юзерів не знайдено</p>
-                      ) : userOptions.map(u => {
-                        const isSelected = selectedUsers.some(s => s.telegram_id === u.telegram_id);
-                        return (
-                          <label key={u.telegram_id}
-                            className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer transition-colors border-b border-gray-50 last:border-0 ${
-                              isSelected ? 'bg-blue-50' : 'hover:bg-gray-50'
-                            }`}>
-                            <input type="checkbox" checked={isSelected} onChange={() => toggleUser(u)}
-                              className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer" />
-                            <span className="font-mono text-xs text-gray-500 shrink-0">{u.telegram_id}</span>
-                            <span className="flex-1 text-sm text-gray-700 truncate">{u.username ? `@${u.username}` : '—'}</span>
-                            <span className={`text-xs font-medium shrink-0 ${u.is_subscribed ? 'text-green-600' : 'text-gray-400'}`}>
-                              {u.is_subscribed ? 'Active' : 'Inactive'}
-                            </span>
-                          </label>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
-              {selectedUsers.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 mt-2">
-                  {selectedUsers.map(u => (
-                    <span key={u.telegram_id} className="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-100 text-blue-800 text-xs font-medium rounded-full">
-                      {u.username ? `@${u.username}` : u.telegram_id}
-                      <button onClick={() => setSelectedUsers(prev => prev.filter(p => p.telegram_id !== u.telegram_id))}
-                        className="hover:text-blue-600 cursor-pointer text-blue-400">&times;</button>
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Send button + progress */}
-          <div className="mt-4 space-y-3">
-            <button onClick={handleSend} disabled={!canSend}
-              className="w-full px-4 py-2.5 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-colors">
-              {sending ? 'Відправляю...' : 'Відправити'}
-            </button>
-
-            {progress && !progress.done && (
-              <div className="space-y-1.5">
-                <div className="flex justify-between text-xs text-gray-500">
-                  <span>Надіслано: {progress.sent}{progress.failed > 0 ? ` (помилок: ${progress.failed})` : ''}</span>
-                  <span>{progress.sent + progress.failed} / {progress.total}</span>
-                </div>
-                <div className="w-full bg-gray-200 rounded-full h-2">
-                  <div className="bg-blue-600 h-2 rounded-full transition-all"
-                    style={{ width: `${Math.round(((progress.sent + progress.failed) / progress.total) * 100)}%` }} />
-                </div>
-              </div>
-            )}
-
-            {result && (
-              <div className={`px-3 py-2 rounded-lg text-xs ${result.ok ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
-                {result.message}
-              </div>
-            )}
-
-            {progress && progress.errors.length > 0 && (
-              <div>
-                <h4 className="text-xs font-semibold text-red-700 mb-1.5">Помилки ({progress.errors.length}):</h4>
-                <div className="max-h-32 overflow-auto space-y-1">
-                  {progress.errors.map((e, i) => (
-                    <div key={i} className="flex gap-2 px-2 py-1.5 bg-red-50 rounded text-xs">
-                      <span className="font-mono text-red-700 shrink-0">{e.telegramId}</span>
-                      <span className="text-red-500 truncate">{e.error}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
+        <TargetSelector
+          target={target} onTargetChange={setTarget}
+          selectedUsers={selectedUsers} onSelectedUsersChange={setSelectedUsers}
+          sending={sending} onSend={handleSend} canSend={canSend}
+          progress={progress} result={result}
+        />
 
       </div>
     </div>
@@ -971,71 +1014,17 @@ function BotBroadcastPage({ onBack }: { onBack: () => void }) {
 
 function VideoNotePage({ onBack }: { onBack: () => void }) {
   const [fileId, setFileId] = useState('');
-  const [target, setTarget] = useState<'all' | 'subscribers' | 'specific'>('all');
+  const [target, setTarget] = useState<BroadcastTarget>('all');
   const [selectedUsers, setSelectedUsers] = useState<UserOption[]>([]);
-  const [userSearch, setUserSearch] = useState('');
-  const [userOptions, setUserOptions] = useState<UserOption[]>([]);
-  const [showDropdown, setShowDropdown] = useState(false);
-  const [loadingUsers, setLoadingUsers] = useState(false);
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
-  const [progress, setProgress] = useState<{ total: number; sent: number; failed: number; done: boolean; errors: { telegramId: number; error: string }[] } | null>(null);
+  const [progress, setProgress] = useState<BroadcastProgress | null>(null);
   const { headers } = useAuth();
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const dropdownRef = useRef<HTMLDivElement>(null);
-
-  // Close dropdown on click outside
-  useEffect(() => {
-    if (!showDropdown) return;
-    function handleClick(e: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setShowDropdown(false);
-      }
-    }
-    document.addEventListener('mousedown', handleClick);
-    return () => document.removeEventListener('mousedown', handleClick);
-  }, [showDropdown]);
-
-  // Cleanup polling on unmount
   useEffect(() => {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, []);
-
-  // Fetch users for dropdown when search changes
-  useEffect(() => {
-    if (target !== 'specific') return;
-    const timer = setTimeout(async () => {
-      setLoadingUsers(true);
-      try {
-        const params = new URLSearchParams({ page: '1', limit: '50' });
-        if (userSearch.trim()) params.set('search', userSearch.trim());
-        const res = await fetch(`/api/users?${params}`, { headers });
-        if (res.ok) {
-          const data = await res.json();
-          setUserOptions(data.users.map((u: { telegram_id: number; username: string | null; is_subscribed: boolean }) => ({
-            telegram_id: u.telegram_id,
-            username: u.username,
-            is_subscribed: u.is_subscribed,
-          })));
-        }
-      } catch { /* ignore */ }
-      setLoadingUsers(false);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [userSearch, target]);
-
-  function toggleUser(user: UserOption) {
-    setSelectedUsers(prev =>
-      prev.some(u => u.telegram_id === user.telegram_id)
-        ? prev.filter(u => u.telegram_id !== user.telegram_id)
-        : [...prev, user]
-    );
-  }
-
-  function removeUser(telegramId: number) {
-    setSelectedUsers(prev => prev.filter(u => u.telegram_id !== telegramId));
-  }
 
   function startPolling(jobId: string) {
     if (pollRef.current) clearInterval(pollRef.current);
@@ -1096,7 +1085,7 @@ function VideoNotePage({ onBack }: { onBack: () => void }) {
     }
   }
 
-  const canSend = fileId.trim() && !sending && (target !== 'specific' || selectedUsers.length > 0);
+  const canSend = !!(fileId.trim() && !sending && (target !== 'specific' || selectedUsers.length > 0));
 
   return (
     <div className="overflow-y-auto h-full pb-6">
@@ -1111,199 +1100,42 @@ function VideoNotePage({ onBack }: { onBack: () => void }) {
         </div>
       </div>
 
-      <div className="flex gap-6">
-      {/* Left column — form */}
-      <div className="max-w-xl pl-6 space-y-6">
-        {/* Instructions */}
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
-          <h4 className="text-sm font-semibold text-blue-900 mb-2">Як отримати file_id:</h4>
-          <ol className="text-sm text-blue-800 space-y-1 list-decimal list-inside">
-            <li>Зніми відео кружечок в Telegram</li>
-            <li>Надішли його боту в приватний чат</li>
-            <li>Бот відповість з file_id — скопіюй його</li>
-            <li>Встав file_id в поле нижче</li>
-          </ol>
-        </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Column 1: File ID + Instructions */}
+        <div className="bg-white border border-gray-200 rounded-xl p-5 flex flex-col">
+          <h3 className="text-sm font-semibold text-gray-900 mb-3">Відео кружечок</h3>
 
-        {/* File ID input */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">File ID</label>
-          <textarea
-            value={fileId}
-            onChange={(e) => setFileId(e.target.value)}
-            placeholder="Встав file_id від бота..."
-            rows={2}
-            className="w-full px-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono resize-y"
-          />
-        </div>
-
-        {/* Target selection */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">Кому надіслати</label>
-          <div className="flex gap-2 flex-wrap items-center">
-            {([
-              { key: 'all' as const, label: 'Всім юзерам', tooltip: 'Надіслати кружечок всім юзерам які коли-небудь заходили в бот.' },
-              { key: 'subscribers' as const, label: 'Тільки підписникам', tooltip: 'Надіслати тільки юзерам з активною підпискою.' },
-              { key: 'specific' as const, label: 'Конкретним юзерам', tooltip: 'Надіслати одному або декільком юзерам за Telegram ID.' },
-            ]).map((opt) => (
-              <div key={opt.key} className="relative">
-                <button
-                  onClick={() => setTarget(opt.key)}
-                  className={`px-4 py-2 text-sm font-medium rounded-lg cursor-pointer transition-colors inline-flex items-center gap-1.5 ${
-                    target === opt.key
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                  }`}
-                >
-                  <InfoTooltip content={opt.tooltip} />
-                  {opt.label}
-                </button>
-              </div>
-            ))}
+          {/* Instructions */}
+          <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 mb-3">
+            <h4 className="text-sm font-semibold text-blue-900 mb-2">Як отримати file_id:</h4>
+            <ol className="text-sm text-blue-800 space-y-1 list-decimal list-inside">
+              <li>Зніми відео кружечок в Telegram</li>
+              <li>Надішли його боту в приватний чат</li>
+              <li>Бот відповість з file_id — скопіюй його</li>
+              <li>Встав file_id в поле нижче</li>
+            </ol>
           </div>
-        </div>
 
-        {/* Specific users picker */}
-        {target === 'specific' && (
+          {/* File ID input */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Обрати юзерів</label>
-
-            <div className="relative" ref={dropdownRef}>
-              {/* Trigger button */}
-              <button
-                onClick={() => setShowDropdown(!showDropdown)}
-                className="w-full flex items-center justify-between px-3 py-2.5 text-sm border border-gray-300 rounded-lg bg-white cursor-pointer hover:border-gray-400 transition-colors"
-              >
-                <span className={selectedUsers.length > 0 ? 'text-gray-700' : 'text-gray-400'}>
-                  {selectedUsers.length > 0
-                    ? `Обрано: ${selectedUsers.length}`
-                    : 'Оберіть юзерів...'}
-                </span>
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"
-                  className={`w-4 h-4 text-gray-400 transition-transform ${showDropdown ? 'rotate-180' : ''}`}>
-                  <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
-                </svg>
-              </button>
-
-              {/* Dropdown */}
-              {showDropdown && (
-                <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg">
-                  {/* Search */}
-                  <div className="p-2 border-b border-gray-100">
-                    <input
-                      type="text"
-                      value={userSearch}
-                      onChange={(e) => setUserSearch(e.target.value)}
-                      placeholder="Пошук..."
-                      autoFocus
-                      className="w-full px-3 py-2 text-sm border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    />
-                  </div>
-
-                  {/* List */}
-                  <div className="max-h-60 overflow-auto">
-                    {loadingUsers ? (
-                      <p className="px-3 py-3 text-sm text-gray-400 text-center">Завантаження...</p>
-                    ) : userOptions.length === 0 ? (
-                      <p className="px-3 py-3 text-sm text-gray-400 text-center">Юзерів не знайдено</p>
-                    ) : userOptions.map(u => {
-                      const isSelected = selectedUsers.some(s => s.telegram_id === u.telegram_id);
-                      return (
-                        <label key={u.telegram_id}
-                          className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer transition-colors border-b border-gray-50 last:border-0 ${
-                            isSelected ? 'bg-blue-50' : 'hover:bg-gray-50'
-                          }`}>
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={() => toggleUser(u)}
-                            className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                          />
-                          <span className="font-mono text-xs text-gray-500 w-28 shrink-0">{u.telegram_id}</span>
-                          <span className="flex-1 text-sm text-gray-700 truncate">{u.username ? `@${u.username}` : '—'}</span>
-                          <span className={`text-xs font-medium shrink-0 ${
-                            u.is_subscribed ? 'text-green-600' : 'text-gray-400'
-                          }`}>
-                            {u.is_subscribed ? 'Active' : 'Inactive'}
-                          </span>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Selected chips */}
-            {selectedUsers.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 mt-2">
-                {selectedUsers.map(u => (
-                  <span key={u.telegram_id}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-100 text-blue-800 text-xs font-medium rounded-full">
-                    {u.username ? `@${u.username}` : u.telegram_id}
-                    <button onClick={() => removeUser(u.telegram_id)}
-                      className="hover:text-blue-600 cursor-pointer text-blue-400">&times;</button>
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Send button */}
-        <button
-          onClick={handleSend}
-          disabled={!canSend}
-          className="w-full px-4 py-2.5 text-sm font-medium text-white bg-blue-600 rounded-lg
-                     hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-colors"
-        >
-          {sending ? 'Відправляю...' : 'Відправити'}
-        </button>
-
-        {/* Progress */}
-        {progress && !progress.done && (
-          <div className="space-y-2">
-            <div className="flex justify-between text-sm text-gray-600">
-              <span>Надіслано: {progress.sent}{progress.failed > 0 ? ` (помилок: ${progress.failed})` : ''}</span>
-              <span>{progress.sent + progress.failed} / {progress.total}</span>
-            </div>
-            <div className="w-full bg-gray-200 rounded-full h-2.5">
-              <div
-                className="bg-blue-600 h-2.5 rounded-full transition-all"
-                style={{ width: `${Math.round(((progress.sent + progress.failed) / progress.total) * 100)}%` }}
-              />
-            </div>
-          </div>
-        )}
-
-        {/* Result */}
-        {result && (
-          <div className={`px-4 py-3 rounded-lg text-sm ${
-            result.ok ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
-          }`}>
-            {result.message}
-          </div>
-        )}
-      </div>
-
-      {/* Right column — error report (only shown when there are errors) */}
-      {progress && progress.errors.length > 0 && (
-        <div className="flex-1 min-w-[250px]">
-          <div className="bg-white border border-red-200 rounded-xl p-5 sticky top-4">
-            <h3 className="text-sm font-semibold text-red-700 mb-3">
-              Помилки ({progress.errors.length})
-            </h3>
-            <div className="max-h-[400px] overflow-auto space-y-1.5">
-              {progress.errors.map((e, i) => (
-                <div key={i} className="flex gap-2 px-2.5 py-2 bg-red-50 rounded-lg text-xs">
-                  <span className="font-mono text-red-700 shrink-0">{e.telegramId}</span>
-                  <span className="text-red-500">{e.error}</span>
-                </div>
-              ))}
-            </div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">File ID</label>
+            <textarea
+              value={fileId}
+              onChange={(e) => setFileId(e.target.value)}
+              placeholder="Встав file_id від бота..."
+              rows={2}
+              className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent font-mono resize-y"
+            />
           </div>
         </div>
-      )}
+
+        {/* Column 2: Target + Send */}
+        <TargetSelector
+          target={target} onTargetChange={setTarget}
+          selectedUsers={selectedUsers} onSelectedUsersChange={setSelectedUsers}
+          sending={sending} onSend={handleSend} canSend={canSend}
+          progress={progress} result={result}
+        />
       </div>
     </div>
   );

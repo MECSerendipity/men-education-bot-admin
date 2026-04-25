@@ -179,6 +179,20 @@ export function registerPartnerHandler(bot: Telegraf) {
   bot.action('partner:withdraw:uah', async (ctx) => {
     await ctx.answerCbQuery();
     const telegramId = ctx.from.id;
+
+    const day = new Date().getDate();
+    if (day < 10 || day > 20) {
+      await ctx.editMessageText(
+        `Заявку на виведення можна подати тільки з 10 по 20 число кожного місяця.`,
+        {
+          reply_markup: {
+            inline_keyboard: [[{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'partner:balance' }]],
+          },
+        },
+      );
+      return;
+    }
+
     const balance = await getPartnerBalance(telegramId);
     const config = await getPartnerConfig();
 
@@ -213,6 +227,20 @@ export function registerPartnerHandler(bot: Telegraf) {
   bot.action('partner:withdraw:usdt', async (ctx) => {
     await ctx.answerCbQuery();
     const telegramId = ctx.from.id;
+
+    const day = new Date().getDate();
+    if (day < 10 || day > 20) {
+      await ctx.editMessageText(
+        `Заявку на виведення можна подати тільки з 10 по 20 число кожного місяця.`,
+        {
+          reply_markup: {
+            inline_keyboard: [[{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'partner:balance' }]],
+          },
+        },
+      );
+      return;
+    }
+
     const balance = await getPartnerBalance(telegramId);
     const config = await getPartnerConfig();
 
@@ -447,7 +475,7 @@ export function registerPartnerHandler(bot: Telegraf) {
       return `@${start}**${end}`;
     };
 
-    const header = 'Username,Clicked,Active,Inactive';
+    const header = 'Username,"Clicked (дата переходу за реферальним посиланням)","Active (true - має активну підписку та приносить дохід; false - підписка неактивна)","Inactive (true - підписка закінчилась, дохід не нараховується; false - ще не оформлював підписку)"';
     const rows = referrals.map(r => {
       const username = maskUsername(r.username);
       const clicked = formatCsvDate(r.created_at);

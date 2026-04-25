@@ -1,0 +1,151 @@
+import { Telegraf } from 'telegraf';
+import { logger } from '../utils/logger.js';
+import { checkOrderStatus } from '../services/wayforpay.js';
+import { getStalePendingCardTransactions, updateTransactionStatus, updateTransactionCard, updateTransactionDeclineReason, claimTransaction, linkTransactionToSubscription } from '../db/transactions.js';
+import { activateSubscription, updateSubscriptionCard, getActiveSubscription, changePaymentMethod, hasActiveSubscription } from '../db/subscriptions.js';
+import { logSubscriptionEvent } from '../db/subscription-events.js';
+import { getPricesForUser, daysFromPlanKey, switchPlanMethod } from '../services/pricing.js';
+import { deleteOffersForUser } from '../db/prices.js';
+import { sendRulesOrInvite } from '../handlers/rules.js';
+import { sendPaymentNotification, buildPaymentSuccessMessage, buildFirstPaymentDeclinedMessage } from '../services/notifications.js';
+import { getUserByTelegramId } from '../db/users.js';
+import { refreshMenuKeyboard } from '../keyboards/index.js';
+import { processPartnerCommission } from '../services/partner.js';
+
+/**
+ * Check stale Pending card transactions via WayForPay CHECK_STATUS API.
+ * - Approved -> activate subscription, notify user
+ * - Declined -> notify user
+ * - Not found / Expired / no status -> mark as Cancelled
+ */
+export async function runPendingCheckJob(bot: Telegraf): Promise<void> {
+  const pending = await getStalePendingCardTransactions();
+  if (pending.length === 0) return;
+
+  logger.info(`Pending check: found ${pending.length} stale transaction(s)`);
+
+  for (const tx of pending) {
+    try {
+      const result = await checkOrderStatus(tx.order_reference);
+      const { transactionStatus, recToken, cardPan } = result;
+
+      logger.info('Pending check: WayForPay status', {
+        orderReference: tx.order_reference,
+        transactionStatus,
+        reasonCode: result.reasonCode,
+      });
+
+      if (transactionStatus === 'Approved') {
+        // Atomically claim to prevent race with a late callback
+        const claimed = await claimTransaction(tx.order_reference, tx.status, 'Approved');
+        if (!claimed) {
+          logger.info('Pending check: already claimed, skipping', { orderReference: tx.order_reference });
+          continue;
+        }
+
+        await processApproved(bot, tx, recToken, cardPan);
+      } else if (transactionStatus === 'Declined' || transactionStatus === 'Refunded') {
+        const claimed = await claimTransaction(tx.order_reference, tx.status, 'Declined');
+        if (!claimed) continue;
+
+        await updateTransactionDeclineReason(tx.order_reference, result.reason, result.reasonCode);
+        await processDeclined(bot, tx);
+      } else if (transactionStatus === 'InProcessing' || transactionStatus === 'WaitingAuthComplete') {
+        // Still processing — skip, will check again next run
+        logger.info('Pending check: still processing, will retry', { orderReference: tx.order_reference });
+      } else {
+        // Expired, not found, or unknown — cancel
+        await updateTransactionStatus(tx.order_reference, 'Cancelled');
+        logger.info('Pending check: cancelled stale transaction', {
+          orderReference: tx.order_reference,
+          wayforpayStatus: transactionStatus || 'empty',
+        });
+      }
+    } catch (err) {
+      logger.error('Pending check: failed to process transaction', { orderReference: tx.order_reference, err });
+    }
+  }
+}
+
+async function processApproved(bot: Telegraf, tx: { id: number; telegram_id: number; plan: string; amount: number; currency: string; order_reference: string; status: string }, recToken: string | null, cardPan: string | null): Promise<void> {
+  if (tx.plan === 'card_change') {
+    const activeSub = await getActiveSubscription(tx.telegram_id);
+    if (recToken && activeSub) {
+      await updateTransactionCard(tx.order_reference, recToken, cardPan);
+      await updateSubscriptionCard(tx.telegram_id, recToken, cardPan);
+      await linkTransactionToSubscription(tx.id, activeSub.id);
+      await logSubscriptionEvent({
+        subscriptionId: activeSub.id, telegramId: tx.telegram_id, event: 'card_changed',
+        plan: activeSub.plan, method: 'card', cardPan, amount: 1, currency: 'UAH', expiresAt: activeSub.expires_at,
+      });
+      await bot.telegram.sendMessage(tx.telegram_id, `\u{2705} Картку змінено!\n\nНова картка: ${cardPan ?? 'збережено'}\nНаступне автоматичне продовження буде з нової картки.`).catch(() => {});
+    }
+  } else if (tx.plan === 'method_change') {
+    const activeSub = await getActiveSubscription(tx.telegram_id);
+    if (recToken && activeSub) {
+      await updateTransactionCard(tx.order_reference, recToken, cardPan);
+      const newPlan = switchPlanMethod(activeSub.plan, 'card');
+      await changePaymentMethod(tx.telegram_id, 'card', newPlan, cardPan);
+      await updateSubscriptionCard(tx.telegram_id, recToken, cardPan);
+      await linkTransactionToSubscription(tx.id, activeSub.id);
+      await bot.telegram.sendMessage(tx.telegram_id, `\u{2705} Метод оплати змінено на картку!\n\nКартка: ${cardPan ?? 'збережено'}\nНаступне продовження буде автоматично з картки.`).catch(() => {});
+    }
+  } else {
+    // Normal subscription payment
+    const days = daysFromPlanKey(tx.plan);
+    const isRenewal = await hasActiveSubscription(tx.telegram_id);
+
+    await updateTransactionCard(tx.order_reference, recToken, cardPan);
+
+    const prices = await getPricesForUser(tx.telegram_id);
+    const subscription = await activateSubscription({
+      telegramId: tx.telegram_id, plan: tx.plan, method: 'card', days,
+      transactionId: tx.id, prices, cardPan, recToken,
+    });
+
+    await deleteOffersForUser(tx.telegram_id);
+
+    const successText = buildPaymentSuccessMessage({
+      plan: tx.plan, amount: tx.amount, currency: tx.currency,
+      expiresAt: subscription.expires_at, isRenewal,
+    });
+
+    await bot.telegram.sendMessage(tx.telegram_id, successText, { parse_mode: 'HTML' }).catch(() => {});
+
+    if (!isRenewal) {
+      await sendRulesOrInvite(bot, tx.telegram_id);
+    } else {
+      await refreshMenuKeyboard(bot, tx.telegram_id, true);
+    }
+
+    const user = await getUserByTelegramId(tx.telegram_id);
+    await sendPaymentNotification(bot, {
+      subscriptionId: subscription.id, transactionId: tx.id, userId: user?.id ?? 0,
+      telegramId: tx.telegram_id, username: user?.username ?? null,
+      plan: tx.plan, amount: tx.amount, currency: tx.currency,
+      orderReference: tx.order_reference, method: 'card',
+    });
+
+    await processPartnerCommission(bot, {
+      referredTelegramId: tx.telegram_id, transactionId: tx.id,
+      paymentAmount: tx.amount, paymentCurrency: tx.currency,
+    });
+  }
+
+  logger.info('Pending check: processed Approved transaction', { orderReference: tx.order_reference, plan: tx.plan });
+}
+
+async function processDeclined(bot: Telegraf, tx: { telegram_id: number; plan: string; amount: number; currency: string }): Promise<void> {
+  if (tx.plan === 'card_change') {
+    await bot.telegram.sendMessage(tx.telegram_id, `\u{274C} Не вдалося додати картку.\n\nСпробуй ще раз.`).catch(() => {});
+  } else if (tx.plan === 'method_change') {
+    await bot.telegram.sendMessage(tx.telegram_id, `\u{274C} Не вдалося змінити метод оплати.\n\nСпробуй ще раз.`).catch(() => {});
+  } else {
+    const declinedText = buildFirstPaymentDeclinedMessage({ plan: tx.plan, amount: tx.amount, currency: tx.currency });
+    await bot.telegram.sendMessage(tx.telegram_id, declinedText, {
+      reply_markup: { inline_keyboard: [[{ text: '\u{1F504} Спробувати ще раз', callback_data: 'subscription' }]] },
+    }).catch(() => {});
+  }
+
+  logger.info('Pending check: processed Declined transaction', { orderReference: (tx as any).order_reference, plan: tx.plan });
+}

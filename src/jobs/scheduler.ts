@@ -6,6 +6,7 @@ import { runCleanupJob } from './cleanup.js';
 import { runCryptoRenewalReminder } from './crypto-reminder.js';
 import { runTestCardCharge } from './card-charge-test.js';
 import { runTestExpireJob } from './expire-test.js';
+import { runPendingCheckJob } from './pending-check.js';
 
 /** Job schedule definition */
 interface ScheduledJob {
@@ -68,6 +69,15 @@ export function startScheduler(bot: Telegraf): void {
     tick(bot).catch((err) => logger.error('Scheduler tick failed', err));
   }, 60 * 1000);
   interval.unref();
+
+  // Pending card transactions check — every 5 minutes
+  const pendingCheckInterval = setInterval(() => {
+    runPendingCheckJob(bot).catch((err) => logger.error('Pending check tick failed', err));
+  }, 5 * 60 * 1000);
+  pendingCheckInterval.unref();
+
+  // Run pending check on startup
+  runPendingCheckJob(bot).catch((err) => logger.error('Pending check initial tick failed', err));
 
   // TODO: TESTING MODE — crypto reminder + card charge every 1 min. Remove before production.
   const cryptoReminderInterval = setInterval(() => {

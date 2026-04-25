@@ -76,7 +76,7 @@ async function handleSuccessPage(req: IncomingMessage, res: ServerResponse): Pro
   const title = isApproved ? '✅ Дякуємо за оплату!' : '⏳ Оплата обробляється';
   const message = isApproved
     ? 'Повернись у Telegram бот — підписка вже активна.'
-    : 'Перевір статус оплати у Telegram боті.';
+    : 'Можеш закрити цю сторінку та повернутись в бот — підтвердження прийде туди.';
 
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
   res.end(`<!DOCTYPE html>

@@ -93,7 +93,7 @@ export async function createInvoice(params: {
     apiVersion: 1,
     orderReference: params.orderReference,
     orderDate,
-    orderTimeout: 3600,
+    orderTimeout: 1800,
     amount: params.amount,
     currency: params.currency,
     productName: [params.productName],
@@ -162,6 +162,47 @@ export async function removeInvoice(orderReference: string): Promise<boolean> {
   } catch (err) {
     logger.error('WayForPay removeInvoice request error', err);
     return false;
+  }
+}
+
+/** Check transaction status via WayForPay API */
+export async function checkOrderStatus(orderReference: string): Promise<{
+  transactionStatus: string;
+  reasonCode: string;
+  reason: string;
+  recToken: string | null;
+  cardPan: string | null;
+}> {
+  const signString = [WAYFORPAY.merchantAccount, orderReference].join(';');
+  const signature = hmacMd5(signString);
+
+  const body = {
+    transactionType: 'CHECK_STATUS',
+    merchantAccount: WAYFORPAY.merchantAccount,
+    orderReference,
+    merchantSignature: signature,
+    apiVersion: 1,
+  };
+
+  try {
+    const response = await fetch(WAYFORPAY_API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    const data = await response.json() as Record<string, unknown>;
+
+    return {
+      transactionStatus: String(data.transactionStatus ?? ''),
+      reasonCode: String(data.reasonCode ?? ''),
+      reason: String(data.reason ?? ''),
+      recToken: data.recToken ? String(data.recToken) : null,
+      cardPan: data.cardPan ? String(data.cardPan) : null,
+    };
+  } catch (err) {
+    logger.error('WayForPay checkOrderStatus request error', err);
+    return { transactionStatus: '', reasonCode: '', reason: 'Request failed', recToken: null, cardPan: null };
   }
 }
 
