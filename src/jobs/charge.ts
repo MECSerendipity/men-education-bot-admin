@@ -6,6 +6,7 @@ import { activateSubscription, type Subscription } from '../db/subscriptions.js'
 import { logger } from '../utils/logger.js';
 import { sendPaymentNotification, buildPaymentSuccessMessage, buildChargeFailedMessage } from '../services/notifications.js';
 import { getUserByTelegramId } from '../db/users.js';
+import { TEXTS } from '../texts/index.js';
 import { processPartnerCommission } from '../services/partner.js';
 
 interface PlanPrice {
@@ -69,7 +70,7 @@ export async function runCardChargeJob(bot: Telegraf): Promise<void> {
       try {
         await bot.telegram.sendMessage(
           sub.telegram_id,
-          '\u{26A0}\u{FE0F} Помилка автоматичного продовження підписки. Зверніся в підтримку.',
+          TEXTS.AUTO_RENEWAL_PLAN_ERROR,
         );
       } catch { /* ignore send failure */ }
       continue;
@@ -178,8 +179,8 @@ export async function runCardChargeJob(bot: Telegraf): Promise<void> {
         });
 
         const buttonText = sub.card_pan
-          ? `\u{1F4B3} Оплатити зараз (${sub.card_pan})`
-          : '\u{1F4B3} Оплатити зараз';
+          ? `${TEXTS.BTN_PAY_NOW} (${sub.card_pan})`
+          : TEXTS.BTN_PAY_NOW;
 
         await bot.telegram.sendMessage(
           sub.telegram_id,
@@ -237,7 +238,7 @@ export async function runCryptoReminderJob(bot: Telegraf): Promise<void> {
         {
           reply_markup: {
             inline_keyboard: [
-              [{ text: '\u{26A1}\u{FE0F} Оплатити USDT', callback_data: 'subscription' }],
+              [{ text: TEXTS.BTN_PAY_USDT_INLINE, callback_data: 'subscription' }],
             ],
           },
         },

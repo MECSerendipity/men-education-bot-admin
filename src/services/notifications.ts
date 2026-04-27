@@ -3,6 +3,7 @@ import { isFirstApprovedTransaction } from '../db/transactions.js';
 import { escapeHtml } from '../utils/html.js';
 import { logger } from '../utils/logger.js';
 import { USDT, CARD } from '../config.js';
+import { TEXTS } from '../texts/index.js';
 
 /** Format date as DD.MM.YYYY */
 export function formatDate(date: Date): string {
@@ -28,20 +29,14 @@ export function buildPaymentSuccessMessage(params: {
   expiresAt: Date;
   isRenewal?: boolean;
 }): string {
-  const statusText = params.isRenewal
-    ? 'Підписка продовжена! Дякую \u{1F4AA}'
-    : 'Підписка активована! Дякую \u{1F4AA}';
+  const statusText = params.isRenewal ? TEXTS.PAYMENT_SUCCESS_RENEWAL : TEXTS.PAYMENT_SUCCESS_ACTIVATION;
 
-  return (
-    `\u{2705} Оплата підтверджена\n\n` +
-    `▸ План: ${planDisplayName(params.plan)}\n` +
-    `▸ Сума: ${params.amount} ${params.currency}\n` +
-    `\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n` +
-    `${statusText}\n\n` +
-    `\u{1F5D3}\u{FE0F} Дата наступного платежу: ${formatDate(params.expiresAt)}\n` +
-    `▸ Сума: ${params.amount} ${params.currency}\n\n` +
-    `З повагою, Men Education Team!`
-  );
+  return TEXTS.PAYMENT_SUCCESS_TEMPLATE
+    .replaceAll('{plan}', planDisplayName(params.plan))
+    .replaceAll('{amount}', String(params.amount))
+    .replaceAll('{currency}', params.currency)
+    .replace('{statusText}', statusText)
+    .replace('{expiresDate}', formatDate(params.expiresAt));
 }
 
 /** Build declined message for first payment (WayForPay callback) */
@@ -50,13 +45,10 @@ export function buildFirstPaymentDeclinedMessage(params: {
   amount: number;
   currency: string;
 }): string {
-  return (
-    `\u{274C} Оплата не підтверджена\n\n` +
-    `▸ План: ${planDisplayName(params.plan)}\n` +
-    `▸ Сума: ${params.amount} ${params.currency}\n` +
-    `\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n` +
-    `Спробуй ще раз або обери інший спосіб оплати.`
-  );
+  return TEXTS.PAYMENT_DECLINED_TEMPLATE
+    .replace('{plan}', planDisplayName(params.plan))
+    .replace('{amount}', String(params.amount))
+    .replace('{currency}', params.currency);
 }
 
 /** Build declined message for auto-renewal (charge job) */
@@ -66,14 +58,12 @@ export function buildChargeFailedMessage(params: {
   currency: string;
   cardPan: string | null;
 }): string {
-  return (
-    `\u{274C} Не вдалося автоматично продовжити підписку\n\n` +
-    `▸ План: ${planDisplayName(params.plan)}\n` +
-    `▸ Сума: ${params.amount} ${params.currency}\n` +
-    (params.cardPan ? `▸ Картка: ${params.cardPan}\n` : '') +
-    `\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n` +
-    `Перевір картку і спробуй оплатити ще раз \u{1F447}`
-  );
+  const cardLine = params.cardPan ? TEXTS.CARD_LABEL.replace('{cardPan}', params.cardPan) + '\n' : '';
+  return TEXTS.CHARGE_FAILED_TEMPLATE
+    .replace('{plan}', planDisplayName(params.plan))
+    .replace('{amount}', String(params.amount))
+    .replace('{currency}', params.currency)
+    .replace('{cardLine}', cardLine);
 }
 
 /** Build declined message for manual retry (after pressing "Оплатити зараз") */
@@ -83,14 +73,12 @@ export function buildRetryFailedMessage(params: {
   currency: string;
   cardPan: string | null;
 }): string {
-  return (
-    `\u{274C} Оплата не підтверджена\n\n` +
-    `▸ План: ${planDisplayName(params.plan)}\n` +
-    `▸ Сума: ${params.amount} ${params.currency}\n` +
-    (params.cardPan ? `▸ Картка: ${params.cardPan}\n` : '') +
-    `\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n` +
-    `Виріши проблему, а я завтра спробую знову.`
-  );
+  const cardLine = params.cardPan ? TEXTS.CARD_LABEL.replace('{cardPan}', params.cardPan) + '\n' : '';
+  return TEXTS.RETRY_FAILED_TEMPLATE
+    .replace('{plan}', planDisplayName(params.plan))
+    .replace('{amount}', String(params.amount))
+    .replace('{currency}', params.currency)
+    .replace('{cardLine}', cardLine);
 }
 
 /** Send payment notification to admin channel (card + auto-renewal) */

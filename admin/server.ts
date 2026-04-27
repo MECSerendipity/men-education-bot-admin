@@ -17,13 +17,13 @@ import multipart from '@fastify/multipart';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 config({ path: join(__dirname, '..', '.env') });
 
-const ADMIN_LOGIN = process.env.ADMIN_LOGIN;
-const ADMIN_PASSWORD_HASH = process.env.ADMIN_PASSWORD_HASH;
-const JWT_SECRET = process.env.JWT_SECRET;
+const ADMIN_LOGIN = process.env.ADMIN_WEB_LOGIN;
+const ADMIN_PASSWORD_HASH = process.env.ADMIN_WEB_PASSWORD_HASH;
+const JWT_SECRET = process.env.ADMIN_WEB_JWT_SECRET;
 const PORT = Number(process.env.ADMIN_PORT) || 3001;
 
 if (!ADMIN_LOGIN || !ADMIN_PASSWORD_HASH || !JWT_SECRET) {
-  console.error('❌ Add ADMIN_LOGIN, ADMIN_PASSWORD_HASH and JWT_SECRET to .env');
+  console.error('❌ Add ADMIN_WEB_LOGIN, ADMIN_WEB_PASSWORD_HASH and ADMIN_WEB_JWT_SECRET to .env');
   console.error('   Run: npm run hash-password to generate a password hash');
   process.exit(1);
 }

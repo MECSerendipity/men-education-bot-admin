@@ -11,6 +11,7 @@ import { sendPaymentNotification, buildPaymentSuccessMessage, buildFirstPaymentD
 import { getUserByTelegramId } from '../db/users.js';
 import { refreshMenuKeyboard } from '../keyboards/index.js';
 import { processPartnerCommission } from '../services/partner.js';
+import { TEXTS } from '../texts/index.js';
 
 /**
  * Check stale Pending card transactions via WayForPay CHECK_STATUS API.
@@ -78,7 +79,7 @@ async function processApproved(bot: Telegraf, tx: { id: number; telegram_id: num
         subscriptionId: activeSub.id, telegramId: tx.telegram_id, event: 'card_changed',
         plan: activeSub.plan, method: 'card', cardPan, amount: 1, currency: 'UAH', expiresAt: activeSub.expires_at,
       });
-      await bot.telegram.sendMessage(tx.telegram_id, `\u{2705} Картку змінено!\n\nНова картка: ${cardPan ?? 'збережено'}\nНаступне автоматичне продовження буде з нової картки.`).catch(() => {});
+      await bot.telegram.sendMessage(tx.telegram_id, TEXTS.CARD_CHANGED_SUCCESS.replace('{cardPan}', cardPan ?? TEXTS.CARD_PAN_SAVED)).catch(() => {});
     }
   } else if (tx.plan === 'method_change') {
     const activeSub = await getActiveSubscription(tx.telegram_id);
@@ -88,7 +89,7 @@ async function processApproved(bot: Telegraf, tx: { id: number; telegram_id: num
       await changePaymentMethod(tx.telegram_id, 'card', newPlan, cardPan);
       await updateSubscriptionCard(tx.telegram_id, recToken, cardPan);
       await linkTransactionToSubscription(tx.id, activeSub.id);
-      await bot.telegram.sendMessage(tx.telegram_id, `\u{2705} Метод оплати змінено на картку!\n\nКартка: ${cardPan ?? 'збережено'}\nНаступне продовження буде автоматично з картки.`).catch(() => {});
+      await bot.telegram.sendMessage(tx.telegram_id, TEXTS.METHOD_CHANGED_TO_CARD.replace('{cardPan}', cardPan ?? TEXTS.CARD_PAN_SAVED)).catch(() => {});
     }
   } else {
     // Normal subscription payment
@@ -137,13 +138,13 @@ async function processApproved(bot: Telegraf, tx: { id: number; telegram_id: num
 
 async function processDeclined(bot: Telegraf, tx: { telegram_id: number; plan: string; amount: number; currency: string }): Promise<void> {
   if (tx.plan === 'card_change') {
-    await bot.telegram.sendMessage(tx.telegram_id, `\u{274C} Не вдалося додати картку.\n\nСпробуй ще раз.`).catch(() => {});
+    await bot.telegram.sendMessage(tx.telegram_id, TEXTS.CARD_ADD_FAILED.replace('{reason}', '')).catch(() => {});
   } else if (tx.plan === 'method_change') {
-    await bot.telegram.sendMessage(tx.telegram_id, `\u{274C} Не вдалося змінити метод оплати.\n\nСпробуй ще раз.`).catch(() => {});
+    await bot.telegram.sendMessage(tx.telegram_id, TEXTS.METHOD_CHANGE_DECLINED.replace('{reason}', '')).catch(() => {});
   } else {
     const declinedText = buildFirstPaymentDeclinedMessage({ plan: tx.plan, amount: tx.amount, currency: tx.currency });
     await bot.telegram.sendMessage(tx.telegram_id, declinedText, {
-      reply_markup: { inline_keyboard: [[{ text: '\u{1F504} Спробувати ще раз', callback_data: 'subscription' }]] },
+      reply_markup: { inline_keyboard: [[{ text: TEXTS.BTN_RETRY, callback_data: 'subscription' }]] },
     }).catch(() => {});
   }
 

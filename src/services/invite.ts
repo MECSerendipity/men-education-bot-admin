@@ -31,8 +31,10 @@ export function getPrivateChannelIds(): number[] {
 /** Get all channel IDs including kick-only channels (no invite link generated) */
 function getAllKickChannelIds(): number[] {
   const ids = getPrivateChannelIds();
-  const commentsId = Number(process.env.PRIVATE_CHANNEL_COMMENTS ?? 0);
-  if (commentsId && !isNaN(commentsId)) ids.push(commentsId);
+  const moderatorId = Number(process.env.PRIVATE_CHANNEL_MODERATOR ?? 0);
+  if (moderatorId && !isNaN(moderatorId)) ids.push(moderatorId);
+  const partnersId = Number(process.env.PRIVATE_CHANNEL_PARTNERS ?? 0);
+  if (partnersId && !isNaN(partnersId)) ids.push(partnersId);
   return ids;
 }
 

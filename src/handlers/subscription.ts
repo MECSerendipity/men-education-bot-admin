@@ -39,10 +39,10 @@ async function handleCardPayment(ctx: Context, duration: string): Promise<void> 
   const telegramId = ctx.from.id;
 
   if (await hasActiveSubscription(telegramId)) {
-    await ctx.reply('\u{2705} У тебе вже є активна підписка!', {
+    await ctx.reply(TEXTS.ALREADY_SUBSCRIBED, {
       reply_markup: {
         inline_keyboard: [
-          [{ text: '\u{1F4CB} Перевірити підписку', callback_data: 'sub:back' }],
+          [{ text: TEXTS.BTN_CHECK_SUBSCRIPTION, callback_data: 'sub:back' }],
         ],
       },
     });
@@ -53,13 +53,11 @@ async function handleCardPayment(ctx: Context, duration: string): Promise<void> 
   if (cancelledSub) {
     const expiresDate = formatDate(new Date(cancelledSub.expires_at));
     await ctx.reply(
-      `\u{26A0}\u{FE0F} Твоя підписка скасована\n\n` +
-      `\u{1F5D3}\u{FE0F} Доступ дійсний до: ${expiresDate}\n\n` +
-      `\u{1F4A1} Ти можеш відновити підписку зі збереженням поточної ціни до кінця оплаченого періоду.`,
+      TEXTS.CANCELLED_SUB_INFO.replace('{expiresDate}', expiresDate),
       {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '\u{2705} Відновити підписку', callback_data: 'sub:reactivate' }],
+            [{ text: TEXTS.BTN_REACTIVATE, callback_data: 'sub:reactivate' }],
           ],
         },
       },
@@ -68,12 +66,12 @@ async function handleCardPayment(ctx: Context, duration: string): Promise<void> 
   }
 
   if (await hasPendingCardTransaction(telegramId)) {
-    await ctx.reply('У тебе вже є активний платіж. Скористайся попереднім посиланням або зачекай 10 хвилин.');
+    await ctx.reply(TEXTS.PENDING_CARD_PAYMENT);
     return;
   }
 
   if (await hasPendingCryptoTransaction(telegramId)) {
-    await ctx.reply('У тебе вже є активний USDT платіж. Дочекайся його обробки.');
+    await ctx.reply(TEXTS.PENDING_CRYPTO_PAYMENT);
     return;
   }
 
@@ -103,23 +101,23 @@ async function handleCardPayment(ctx: Context, duration: string): Promise<void> 
 
     if (!result.success || !result.invoiceUrl) {
       logger.error('Failed to create WayForPay invoice', { orderReference, reason: result.reason });
-      await ctx.reply('⚠️ Оплата тимчасово недоступна. Спробуй пізніше.');
+      await ctx.reply(TEXTS.PAYMENT_UNAVAILABLE);
       return;
     }
 
     const paymentMsg = await ctx.reply(
-      `\u{1F4B3} Оплата підписки\n\n` +
-      `▸ План: ${plan.display_name}\n` +
-      `▸ Сума: ${plan.amount} ${plan.currency}\n\n` +
-      `\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n` +
-      `\u{23F3} Посилання дійсне 10 хвилин`,
+      TEXTS.PAYMENT_INVOICE_TEMPLATE
+        .replace('{planName}', plan.display_name)
+        .replace('{amount}', String(plan.amount))
+        .replace('{currency}', plan.currency) +
+      '\n' + TEXTS.PAYMENT_LINK_VALIDITY,
       {
         parse_mode: 'HTML',
         reply_markup: {
           inline_keyboard: [
             [
-              { text: '\u{1F4B3} Оплатити', url: result.invoiceUrl },
-              { text: '\u{274C} Відміна', callback_data: `cancel_invoice:${orderReference}` },
+              { text: TEXTS.BTN_PAY, url: result.invoiceUrl },
+              { text: TEXTS.BTN_CANCEL, callback_data: `cancel_invoice:${orderReference}` },
             ],
           ],
         },
@@ -129,7 +127,7 @@ async function handleCardPayment(ctx: Context, duration: string): Promise<void> 
     savePaymentMessage(orderReference, paymentMsg.chat.id, paymentMsg.message_id);
   } catch (err) {
     logger.error('Failed to create payment', err);
-    await ctx.reply('⚠️ Помилка створення платежу. Спробуй ще раз.');
+    await ctx.reply(TEXTS.PAYMENT_CREATION_ERROR);
   }
 }
 
@@ -167,7 +165,7 @@ export function registerSubscriptionHandler(bot: Telegraf) {
       (TEXTS[info.detailKey] ?? '') + '\n\n' +
       `💳 Карткою: ${cardPlan?.amount ?? '?'} ${cardPlan?.currency ?? 'UAH'}\n` +
       `⚡️ USDT: ${cryptoPlan?.amount ?? '?'} USDT\n\n` +
-      (TEXTS.PAYMENT_METHOD_TITLE ?? 'Обери спосіб оплати:');
+      TEXTS.PAYMENT_METHOD_TITLE;
 
     await ctx.editMessageText(text, {
       parse_mode: 'HTML',
@@ -194,11 +192,11 @@ export function registerSubscriptionHandler(bot: Telegraf) {
     deletePaymentMessage(orderReference);
 
     await ctx.editMessageText(
-      '\u{274C} Платіж скасовано\n\nХочеш обрати інший тариф?',
+      TEXTS.PAYMENT_CANCELLED,
       {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '\u{1F504} Обрати тариф', callback_data: 'subscription' }],
+            [{ text: TEXTS.BTN_CHOOSE_TARIFF, callback_data: 'subscription' }],
           ],
         },
       },
@@ -243,14 +241,14 @@ export function registerSubscriptionHandler(bot: Telegraf) {
     const sub = subResult.rows[0] as Subscription | undefined;
 
     if (!sub || !sub.rec_token || !sub.prices) {
-      await ctx.editMessageText('\u{26A0}\u{FE0F} Підписку не знайдено або картка не збережена.');
+      await ctx.editMessageText(TEXTS.SUBSCRIPTION_NOT_FOUND);
       return;
     }
 
     const prices = sub.prices as Record<string, { amount: number; currency: string; days: number; display_name?: string }>;
     const planPrice = prices[sub.plan];
     if (!planPrice) {
-      await ctx.editMessageText('\u{26A0}\u{FE0F} Не вдалося визначити тариф.');
+      await ctx.editMessageText(TEXTS.PLAN_DETERMINATION_ERROR);
       return;
     }
 
@@ -263,12 +261,12 @@ export function registerSubscriptionHandler(bot: Telegraf) {
       [telegramId],
     );
     if (recentCharge.rows.length > 0) {
-      await ctx.editMessageText('\u{26A0}\u{FE0F} Оплата вже обробляється. Зачекай кілька хвилин.');
+      await ctx.editMessageText(TEXTS.PAYMENT_ALREADY_PROCESSING);
       return;
     }
 
     // Show "processing" state
-    await ctx.editMessageText('\u{23F3} Обробка оплати...');
+    await ctx.editMessageText(TEXTS.PAYMENT_PROCESSING_DOTS);
 
     const orderRef = generateOrderReference(sub.telegram_id, 'retry');
     const tx = await createTransaction({

@@ -45,10 +45,10 @@ async function handleCryptoPayment(ctx: Context, duration: string): Promise<void
   const telegramId = ctx.from.id;
 
   if (await hasActiveSubscription(telegramId)) {
-    await ctx.reply('\u{2705} У тебе вже є активна підписка!', {
+    await ctx.reply(TEXTS.ALREADY_SUBSCRIBED, {
       reply_markup: {
         inline_keyboard: [
-          [{ text: '\u{1F4CB} Перевірити підписку', callback_data: 'sub:back' }],
+          [{ text: TEXTS.BTN_CHECK_SUBSCRIPTION, callback_data: 'sub:back' }],
         ],
       },
     });
@@ -59,13 +59,11 @@ async function handleCryptoPayment(ctx: Context, duration: string): Promise<void
   if (cancelledSub) {
     const expiresDate = formatDate(new Date(cancelledSub.expires_at));
     await ctx.reply(
-      `\u{26A0}\u{FE0F} Твоя підписка скасована\n\n` +
-      `\u{1F5D3}\u{FE0F} Доступ дійсний до: ${expiresDate}\n\n` +
-      `\u{1F4A1} Ти можеш відновити підписку зі збереженням поточної ціни до кінця оплаченого періоду.`,
+      TEXTS.CANCELLED_SUB_INFO.replace('{expiresDate}', expiresDate),
       {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '\u{2705} Відновити підписку', callback_data: 'sub:reactivate' }],
+            [{ text: TEXTS.BTN_REACTIVATE, callback_data: 'sub:reactivate' }],
           ],
         },
       },
@@ -79,13 +77,13 @@ async function handleCryptoPayment(ctx: Context, duration: string): Promise<void
 
   // Block if user already has a pending crypto payment (WaitingConfirmation = hash submitted)
   if (await hasPendingCryptoTransaction(telegramId)) {
-    await ctx.reply('У тебе вже є активний USDT платіж. Дочекайся його обробки.');
+    await ctx.reply(TEXTS.PENDING_CRYPTO_PAYMENT);
     return;
   }
 
   // Block if user already has a pending card payment
   if (await hasPendingCardTransaction(telegramId)) {
-    await ctx.reply('У тебе вже є активний платіж карткою. Скористайся попереднім посиланням або зачекай 10 хвилин.');
+    await ctx.reply(TEXTS.USDT_PENDING_CARD);
     return;
   }
 
@@ -94,7 +92,7 @@ async function handleCryptoPayment(ctx: Context, duration: string): Promise<void
 
   if (!walletAddress) {
     logger.error('USDT_WALLET_ADDRESS not configured');
-    await ctx.reply('⚠️ Оплата USDT тимчасово недоступна. Спробуй пізніше.');
+    await ctx.reply(TEXTS.USDT_PAYMENT_UNAVAILABLE);
     return;
   }
 
@@ -110,34 +108,24 @@ async function handleCryptoPayment(ctx: Context, duration: string): Promise<void
 
     // Single message with all payment info
     await ctx.reply(
-      'Прочитай уважно інструкцію 👇\n\n' +
-      'Важливо! При переведенні з тебе зніметься комісія, тому конвертуй свою валюту в крипту З ВРАХУВАННЯМ КОМІСІЇ.\n\n' +
-      'Після оплати ОБОВ\'ЯЗКОВО скопіюй TxID (Хеш) транзакції ❗️\n' +
-      'І ТІЛЬКИ ПІСЛЯ ОПЛАТИ - натисни кнопку "✅ Я оплатив" 👇\n' +
-      'Далі дотримуйся інструкцій бота.\n\n' +
-      'Виникло питання до підтримки - натисни кнопку "Є питання❓"\n\n' +
-      '━━━━━━━━━━━━━━━━━━━━\n\n' +
-      `📦 ${escapeHtml(plan.display_name)}\n` +
-      `ℹ️ Сума оплати — ${plan.amount} USDT\n\n` +
-      'Монета: Tether (USDT)\n' +
-      'Мережа: TRON — TRC20\n\n' +
-      `До сплати: <b>${plan.amount} USDT</b>\n\n` +
-      'Тисни на адресу, щоб скопіювати 👇\n' +
-      `<code>${escapeHtml(walletAddress)}</code>`,
+      TEXTS.USDT_PAYMENT_INSTRUCTIONS
+        .replaceAll('{planName}', escapeHtml(plan.display_name))
+        .replaceAll('{amount}', String(plan.amount))
+        .replace('{wallet}', escapeHtml(walletAddress)),
       {
         parse_mode: 'HTML',
         reply_markup: {
           inline_keyboard: [
-            [{ text: 'Інструкція як дивитись хеш транзакції 🔗', url: USDT.hashInstructionUrl }],
-            [{ text: 'Інструкція як поповняти крипту 🔗', url: USDT.topUpInstructionUrl }],
-            [{ text: 'Є питання ❓', url: SUPPORT_URL }],
+            [{ text: TEXTS.BTN_HASH_INSTRUCTION, url: TEXTS.USDT_HASH_INSTRUCTION_URL }],
+            [{ text: TEXTS.BTN_TOP_UP_INSTRUCTION, url: TEXTS.USDT_TOP_UP_INSTRUCTION_URL }],
+            [{ text: TEXTS.BTN_QUESTION, url: SUPPORT_URL }],
           ],
         },
       },
     );
 
     // Bottom keyboard with "Я ОПЛАТИВ" button
-    await ctx.reply('Продовжимо? 👇', {
+    await ctx.reply(TEXTS.CONTINUE_PROMPT, {
       reply_markup: {
         keyboard: [
           [{ text: TEXTS.BTN_USDT_PAID }],
@@ -148,7 +136,7 @@ async function handleCryptoPayment(ctx: Context, duration: string): Promise<void
     });
   } catch (err) {
     logger.error('Failed to create crypto payment', err);
-    await ctx.reply('⚠️ Помилка створення платежу. Спробуй ще раз.');
+    await ctx.reply(TEXTS.PAYMENT_CREATION_ERROR);
   }
 }
 
@@ -178,19 +166,15 @@ export async function sendCryptoPaymentReminder(bot: Telegraf, telegramId: numbe
 
   await bot.telegram.sendMessage(
     telegramId,
-    `\u{1F514} Нагадування про продовження підписки\n\n` +
-    `\u{1F4E6} ${escapeHtml(plan.display_name)}\n` +
-    `\u{2139}\u{FE0F} Сума оплати — ${plan.amount} USDT\n\n` +
-    `Монета: Tether (USDT)\n` +
-    `Мережа: TRON — TRC20\n\n` +
-    `До сплати: <b>${plan.amount} USDT</b>\n\n` +
-    `Тисни на адресу, щоб скопіювати \u{1F447}\n` +
-    `<code>${escapeHtml(walletAddress)}</code>`,
+    TEXTS.CRYPTO_RENEWAL_REMINDER
+      .replaceAll('{planName}', escapeHtml(plan.display_name))
+      .replaceAll('{amount}', String(plan.amount))
+      .replace('{wallet}', escapeHtml(walletAddress)),
     {
       parse_mode: 'HTML',
       reply_markup: {
         inline_keyboard: [
-          [{ text: '\u{2753} Як оплатити?', callback_data: 'crypto_renew:how_to_pay' }],
+          [{ text: TEXTS.BTN_HOW_TO_PAY, callback_data: 'crypto_renew:how_to_pay' }],
         ],
       },
     },
@@ -198,7 +182,7 @@ export async function sendCryptoPaymentReminder(bot: Telegraf, telegramId: numbe
 
   await bot.telegram.sendMessage(
     telegramId,
-    'Продовжимо? \u{1F447}',
+    TEXTS.CONTINUE_PROMPT,
     {
       reply_markup: {
         keyboard: [
@@ -225,19 +209,14 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
   bot.action('crypto_renew:how_to_pay', async (ctx) => {
     await ctx.answerCbQuery();
     await ctx.editMessageText(
-      'Прочитай уважно інструкцію \u{1F447}\n\n' +
-      'Важливо! При переведенні з тебе зніметься комісія, тому конвертуй свою валюту в крипту З ВРАХУВАННЯМ КОМІСІЇ.\n\n' +
-      'Після оплати ОБОВ\'ЯЗКОВО скопіюй TxID (Хеш) транзакції \u{2757}\n' +
-      'І ТІЛЬКИ ПІСЛЯ ОПЛАТИ - натисни кнопку "\u{2705} Я оплатив" \u{1F447}\n' +
-      'Далі дотримуйся інструкцій бота.\n\n' +
-      'Виникло питання до підтримки - натисни кнопку "Є питання\u{2753}"',
+      TEXTS.USDT_HOW_TO_PAY,
       {
         reply_markup: {
           inline_keyboard: [
-            [{ text: 'Інструкція як дивитись хеш транзакції \u{1F517}', url: USDT.hashInstructionUrl }],
-            [{ text: 'Інструкція як поповняти крипту \u{1F517}', url: USDT.topUpInstructionUrl }],
-            [{ text: 'Є питання \u{2753}', url: SUPPORT_URL }],
-            [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'crypto_renew:back' }],
+            [{ text: TEXTS.BTN_HASH_INSTRUCTION, url: TEXTS.USDT_HASH_INSTRUCTION_URL }],
+            [{ text: TEXTS.BTN_TOP_UP_INSTRUCTION, url: TEXTS.USDT_TOP_UP_INSTRUCTION_URL }],
+            [{ text: TEXTS.BTN_SUPPORT, url: SUPPORT_URL }],
+            [{ text: TEXTS.BTN_BACK, callback_data: 'crypto_renew:back' }],
           ],
         },
       },
@@ -266,25 +245,21 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
     }
 
     if (!state) {
-      await ctx.editMessageText('Не вдалося завантажити дані. Натисни /start щоб почати спочатку.');
+      await ctx.editMessageText(TEXTS.DATA_LOAD_ERROR);
       return;
     }
 
     const walletAddress = USDT.walletAddress;
     await ctx.editMessageText(
-      `\u{1F514} Нагадування про продовження підписки\n\n` +
-      `\u{1F4E6} ${escapeHtml(state.plan.display_name)}\n` +
-      `\u{2139}\u{FE0F} Сума оплати — ${state.plan.amount} USDT\n\n` +
-      `Монета: Tether (USDT)\n` +
-      `Мережа: TRON — TRC20\n\n` +
-      `До сплати: <b>${state.plan.amount} USDT</b>\n\n` +
-      `Тисни на адресу, щоб скопіювати \u{1F447}\n` +
-      `<code>${escapeHtml(walletAddress)}</code>`,
+      TEXTS.CRYPTO_RENEWAL_REMINDER
+        .replaceAll('{planName}', escapeHtml(state.plan.display_name))
+        .replaceAll('{amount}', String(state.plan.amount))
+        .replace('{wallet}', escapeHtml(walletAddress)),
       {
         parse_mode: 'HTML',
         reply_markup: {
           inline_keyboard: [
-            [{ text: '\u{2753} Як оплатити?', callback_data: 'crypto_renew:how_to_pay' }],
+            [{ text: TEXTS.BTN_HOW_TO_PAY, callback_data: 'crypto_renew:how_to_pay' }],
           ],
         },
       },
@@ -299,7 +274,7 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
     // If state lost (bot restarted / TTL expired), try to recreate from active subscription
     if (!state) {
       if (await hasPendingCryptoTransaction(telegramId)) {
-        await ctx.reply('Твій USDT платіж вже на перевірці. Очікуй відповіді.');
+        await ctx.reply(TEXTS.CRYPTO_PAYMENT_UNDER_REVIEW);
         return;
       }
 
@@ -319,7 +294,7 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
       }
 
       if (!state) {
-        await ctx.reply('У тебе немає активного USDT платежу. Обери тариф спочатку.');
+        await ctx.reply(TEXTS.CRYPTO_NO_ACTIVE_PAYMENT);
         return;
       }
     }
@@ -329,7 +304,7 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
     waitingForHash.set(telegramId, state);
 
     // Ask for transaction hash + show cancel button
-    await ctx.reply('Відправ будь ласка Transaction ID (хеш) 👇', {
+    await ctx.reply(TEXTS.CRYPTO_ENTER_HASH, {
       reply_markup: {
         keyboard: [
           [{ text: TEXTS.BTN_USDT_CANCEL }],
@@ -348,7 +323,7 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
     pendingPayment.delete(telegramId);
     waitingForHash.delete(telegramId);
 
-    await ctx.reply('Оплату скасовано.', {
+    await ctx.reply(TEXTS.CRYPTO_PAYMENT_CANCELLED, {
       reply_markup: buildMainMenuKeyboard(false),
     });
   });
@@ -377,7 +352,7 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
 
     if (!adminChannelId) {
       logger.error('USDT_ADMIN_CHANNEL_ID not configured');
-      await ctx.reply('⚠️ Помилка конфігурації. Зверніся в підтримку.');
+      await ctx.reply(TEXTS.CONFIG_ERROR);
       return;
     }
 
@@ -395,16 +370,14 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
 
     // Tell user we're sending for verification
     await ctx.reply(
-      'Дякую! Передаю на перевірку адміністратору. Очікуй відповіді 🔄\n\n' +
-      'USDT транзакція перевіряється, я повідомлю про результат.\n' +
-      'Статус: Перевіряється 🔄',
+      TEXTS.CRYPTO_HASH_SUBMITTED,
       { reply_markup: buildMainMenuKeyboard(false) },
     );
 
     // Send to admin channel for manual verification
     try {
       const user = await getUserByTelegramId(telegramId);
-      const username = ctx.from.username ? `@${escapeHtml(ctx.from.username)}` : 'немає';
+      const username = ctx.from.username ? `@${escapeHtml(ctx.from.username)}` : TEXTS.USERNAME_NONE;
       const isFirst = await isFirstApprovedTransaction(telegramId, state.orderReference);
       const tag = isFirst ? '#first_subscription' : '#renew';
       const threadId = Number(USDT.adminThreadId) || undefined;
@@ -434,7 +407,7 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
       );
     } catch (err) {
       logger.error('Failed to send USDT verification to admin channel', err);
-      await ctx.reply('⚠️ Помилка відправки на перевірку. Зверніся в підтримку @MEdopomoga');
+      await ctx.reply(TEXTS.CRYPTO_VERIFICATION_ERROR);
     }
   });
 

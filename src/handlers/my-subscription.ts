@@ -23,96 +23,89 @@ function subInfo(sub: Subscription) {
   const startedDate = formatDate(new Date(sub.started_at));
   const expiresDate = formatDate(new Date(sub.expires_at));
   const plan = planDisplayName(sub.plan);
-  const method = sub.method === 'card' ? '\u{1F4B3} Картка' : '\u{26A1} USDT';
+  const method = sub.method === 'card' ? TEXTS.METHOD_LABEL_CARD : TEXTS.METHOD_LABEL_USDT;
   const prices = sub.prices as Record<string, { amount?: number; currency?: string }> | null;
   const planPrice = prices?.[sub.plan];
   const priceText = planPrice ? `${planPrice.amount} ${planPrice.currency}` : '-';
   return { startedDate, expiresDate, plan, method, priceText };
 }
 
-/** Build text for active subscription */
-function buildActiveText(sub: Subscription): string {
-  const { startedDate, expiresDate, plan, method, priceText } = subInfo(sub);
-  return (
-    `Твоя підписка активна \u{1F680}\n\n` +
-    `\u{1F4C5} Дата приєднання: ${startedDate}\n` +
-    `\u{1F449} План: ${plan}\n` +
-    `\u{1F4B0} Сума: ${priceText}\n` +
-    `\u{1F4B3} Метод оплати: ${method}\n\n` +
-    `\u{1F5D3}\u{FE0F} Дата наступного платежу: ${expiresDate}\n\n` +
-    `\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n\n` +
-    `\u{203C}\u{FE0F} Ти можеш скасувати підписку в будь-який час. При цьому гроші за підписку не повертаються, але всі доступи до контенту і каналів залишаться в тебе до закінчення оплаченого періоду\n\n` +
-    `\u{203C}\u{FE0F} Ти отримуватимеш нагадування про закінчення періоду підписки\n\n` +
-    `\u{203C}\u{FE0F} Якщо не оплатиш підписку на новий обраний період або не скасуєш її, то в день закінчення вона автоматично буде продовжена на такий самий період, який був (тільки для гривневої підписки)`
-  );
+function fillSubTemplate(template: string, vars: Record<string, string>): string {
+  let result = template;
+  for (const [key, val] of Object.entries(vars)) {
+    result = result.replaceAll(`{${key}}`, val);
+  }
+  return result;
 }
 
-/** Build text for cancelled subscription */
+function buildActiveText(sub: Subscription): string {
+  const { startedDate, expiresDate, plan, method, priceText } = subInfo(sub);
+  return fillSubTemplate(TEXTS.MY_SUB_ACTIVE, { startedDate, expiresDate, plan, method, priceText });
+}
+
 function buildCancelledText(sub: Subscription): string {
   const { startedDate, expiresDate, plan, method, priceText } = subInfo(sub);
-  return (
-    `\u{26A0}\u{FE0F} Твоя підписка скасована\n\n` +
-    `\u{1F4C5} Дата приєднання: ${startedDate}\n` +
-    `\u{1F449} План: ${plan}\n` +
-    `\u{1F4B0} Сума: ${priceText}\n` +
-    `\u{1F4B3} Метод оплати: ${method}\n\n` +
-    `\u{1F5D3}\u{FE0F} Доступ дійсний до: ${expiresDate}\n\n` +
-    `\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\n\n` +
-    `Ти все ще маєш доступ до контенту і каналів до ${expiresDate}.\n\n` +
-    `\u{1F4A1} Якщо передумаєш — можеш відновити підписку зі збереженням поточної ціни до кінця оплаченого періоду.`
-  );
+  return fillSubTemplate(TEXTS.MY_SUB_CANCELLED, { startedDate, expiresDate, plan, method, priceText });
 }
 
 /** Keyboards */
-const ACTIVE_KEYBOARD = {
-  inline_keyboard: [
-    [{ text: '\u{1F517} Мої посилання в клуб', callback_data: 'sub:my_links' }],
-    [{ text: '\u{2699}\u{FE0F} Керування підпискою', callback_data: 'sub:manage' }],
-  ],
-};
+function activeKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: TEXTS.BTN_MY_CLUB_LINKS, callback_data: 'sub:my_links' }],
+      [{ text: TEXTS.BTN_MANAGE_SUBSCRIPTION, callback_data: 'sub:manage' }],
+    ],
+  };
+}
 
-const MANAGE_KEYBOARD = {
-  inline_keyboard: [
-    [{ text: '\u{1F4DD} Змінити план', callback_data: 'sub:change_plan' }],
-    [{ text: '\u{1F504} Змінити метод оплати', callback_data: 'sub:change_method' }],
-    [{ text: '\u{1F4B3} Змінити карту', callback_data: 'sub:change_card' }],
-    [{ text: '\u{274C} Скасувати підписку', callback_data: 'sub:cancel' }],
-    [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:back' }],
-  ],
-};
+function manageKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: TEXTS.BTN_CHANGE_PLAN, callback_data: 'sub:change_plan' }],
+      [{ text: TEXTS.BTN_CHANGE_METHOD, callback_data: 'sub:change_method' }],
+      [{ text: TEXTS.BTN_CHANGE_CARD, callback_data: 'sub:change_card' }],
+      [{ text: TEXTS.BTN_CANCEL_SUBSCRIPTION, callback_data: 'sub:cancel' }],
+      [{ text: TEXTS.BTN_BACK, callback_data: 'sub:back' }],
+    ],
+  };
+}
 
-const CANCELLED_KEYBOARD = {
-  inline_keyboard: [
-    [{ text: '\u{2705} Відновити підписку', callback_data: 'sub:reactivate' }],
-  ],
-};
+function cancelledKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: TEXTS.BTN_REACTIVATE, callback_data: 'sub:reactivate' }],
+    ],
+  };
+}
 
-const CANCEL_CONFIRM_KEYBOARD = {
-  inline_keyboard: [
-    [{ text: '\u{274C} Так, скасувати', callback_data: 'sub:cancel_confirm' }],
-    [{ text: '\u{2B05}\u{FE0F} Ні, повернутись', callback_data: 'sub:manage' }],
-  ],
-};
+function cancelConfirmKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: TEXTS.BTN_YES_CANCEL, callback_data: 'sub:cancel_confirm' }],
+      [{ text: TEXTS.BTN_NO_GO_BACK, callback_data: 'sub:manage' }],
+    ],
+  };
+}
 
 /** Register "Моя підписка" button handler */
 export function registerMySubscriptionHandler(bot: Telegraf) {
   bot.hears(TEXTS.BTN_MY_SUBSCRIPTION, async (ctx) => {
     const activeSub = await getActiveSubscription(ctx.from.id);
     if (activeSub) {
-      await ctx.reply(buildActiveText(activeSub), { reply_markup: ACTIVE_KEYBOARD });
+      await ctx.reply(buildActiveText(activeSub), { reply_markup: activeKeyboard() });
       return;
     }
 
     const cancelledSub = await getCancelledSubscription(ctx.from.id);
     if (cancelledSub) {
-      await ctx.reply(buildCancelledText(cancelledSub), { reply_markup: CANCELLED_KEYBOARD });
+      await ctx.reply(buildCancelledText(cancelledSub), { reply_markup: cancelledKeyboard() });
       return;
     }
 
     await ctx.reply(TEXTS.NO_SUBSCRIPTION, {
       reply_markup: {
         inline_keyboard: [
-          [{ text: '\u{1F4CB} Оформити підписку', callback_data: 'subscription' }],
+          [{ text: TEXTS.BTN_SUBSCRIBE, callback_data: 'subscription' }],
         ],
       },
     });
@@ -124,7 +117,7 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
     const activeSub = await getActiveSubscription(ctx.from!.id);
     if (!activeSub) return;
 
-    await ctx.editMessageText(buildActiveText(activeSub), { reply_markup: MANAGE_KEYBOARD });
+    await ctx.editMessageText(buildActiveText(activeSub), { reply_markup: manageKeyboard() });
   });
 
   // My club links
@@ -140,7 +133,7 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
     await ctx.editMessageReplyMarkup({
       inline_keyboard: [
         ...linkButtons,
-        [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:back' }],
+        [{ text: TEXTS.BTN_BACK, callback_data: 'sub:back' }],
       ],
     });
   });
@@ -153,23 +146,19 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
     const activeSub = await getActiveSubscription(telegramId);
     if (!activeSub) return;
 
-    const currentMethod = activeSub.method === 'card' ? '\u{1F4B3} Картка' : '\u{26A1} USDT';
-    const targetMethod = activeSub.method === 'card' ? '\u{26A1} USDT' : '\u{1F4B3} Картка';
+    const currentMethod = activeSub.method === 'card' ? TEXTS.METHOD_LABEL_CARD : TEXTS.METHOD_LABEL_USDT;
+    const targetMethod = activeSub.method === 'card' ? TEXTS.METHOD_LABEL_USDT : TEXTS.METHOD_LABEL_CARD;
     const targetKey = activeSub.method === 'card' ? 'crypto' : 'card';
 
     if (targetKey === 'crypto') {
       // card → crypto: instant switch
       await ctx.editMessageText(
-        `\u{1F504} Зміна методу оплати\n\n` +
-        `Поточний метод: ${currentMethod}\n` +
-        `Новий метод: ${targetMethod}\n\n` +
-        `При зміні на USDT автоматичне продовження карткою буде вимкнено. ` +
-        `Перед закінченням підписки ти отримаєш нагадування оплатити вручну.`,
+        fillSubTemplate(TEXTS.METHOD_CARD_TO_CRYPTO, { currentMethod, targetMethod }),
         {
           reply_markup: {
             inline_keyboard: [
-              [{ text: '\u{26A1} Змінити на USDT', callback_data: 'sub:switch_to_crypto' }],
-              [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:manage' }],
+              [{ text: TEXTS.BTN_SWITCH_TO_USDT, callback_data: 'sub:switch_to_crypto' }],
+              [{ text: TEXTS.BTN_BACK, callback_data: 'sub:manage' }],
             ],
           },
         },
@@ -177,17 +166,12 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
     } else {
       // crypto → card: needs 1 UAH verification
       await ctx.editMessageText(
-        `\u{1F504} Зміна методу оплати\n\n` +
-        `Поточний метод: ${currentMethod}\n` +
-        `Новий метод: ${targetMethod}\n\n` +
-        `Для підключення оплати карткою потрібно додати картку. ` +
-        `Буде списано 1 грн (обмеження платіжної системи).\n\n` +
-        `Після цього підписка буде автоматично продовжуватись з картки.`,
+        fillSubTemplate(TEXTS.METHOD_CRYPTO_TO_CARD, { currentMethod, targetMethod }),
         {
           reply_markup: {
             inline_keyboard: [
-              [{ text: '\u{1F4B3} Додати картку', callback_data: 'sub:switch_to_card' }],
-              [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:manage' }],
+              [{ text: TEXTS.BTN_ADD_CARD, callback_data: 'sub:switch_to_card' }],
+              [{ text: TEXTS.BTN_BACK, callback_data: 'sub:manage' }],
             ],
           },
         },
@@ -207,20 +191,18 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
     const sub = await changePaymentMethod(telegramId, 'crypto', newPlan);
 
     if (!sub) {
-      await ctx.editMessageText('Не вдалося змінити метод оплати. Спробуй ще раз.');
+      await ctx.editMessageText(TEXTS.CHANGE_METHOD_ERROR);
       return;
     }
 
     logger.info('Payment method changed to crypto', { telegramId, oldPlan: activeSub.plan, newPlan });
 
     await ctx.editMessageText(
-      `\u{2705} Метод оплати змінено на USDT!\n\n` +
-      `Автоматичне продовження карткою вимкнено.\n` +
-      `Перед закінченням підписки ти отримаєш нагадування оплатити USDT.`,
+      TEXTS.METHOD_CHANGED_TO_CRYPTO,
       {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '\u{1F4CB} Моя підписка', callback_data: 'sub:back' }],
+            [{ text: TEXTS.BTN_MY_SUB_INLINE, callback_data: 'sub:back' }],
           ],
         },
       },
@@ -234,11 +216,11 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
 
     if (await hasPendingCardTransaction(telegramId)) {
       await ctx.editMessageText(
-        'У тебе вже є активний платіж. Скористайся попереднім посиланням або зачекай 10 хвилин.',
+        TEXTS.PENDING_CARD_PAYMENT,
         {
           reply_markup: {
             inline_keyboard: [
-              [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:manage' }],
+              [{ text: TEXTS.BTN_BACK, callback_data: 'sub:manage' }],
             ],
           },
         },
@@ -268,11 +250,11 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
     if (!result.success || !result.invoiceUrl) {
       logger.error('Failed to create method change invoice', { orderReference, reason: result.reason });
       await ctx.editMessageText(
-        '\u{26A0}\u{FE0F} Зміна методу тимчасово недоступна. Спробуй пізніше.',
+        TEXTS.CHANGE_METHOD_UNAVAILABLE,
         {
           reply_markup: {
             inline_keyboard: [
-              [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:manage' }],
+              [{ text: TEXTS.BTN_BACK, callback_data: 'sub:manage' }],
             ],
           },
         },
@@ -281,15 +263,12 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
     }
 
     const msg = await ctx.editMessageText(
-      '\u{1F4B3} Додавання картки\n\n' +
-      'Натисни кнопку нижче та введи дані картки.\n' +
-      'Вартість: 1 грн (обмеження платіжної системи).\n\n' +
-      '\u{23F3} Посилання дійсне 10 хвилин',
+      TEXTS.ADD_CARD_INVOICE,
       {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '\u{1F4B3} Додати картку', url: result.invoiceUrl }],
-            [{ text: '\u{274C} Скасувати', callback_data: `cancel_method_change:${orderReference}` }],
+            [{ text: TEXTS.BTN_ADD_CARD, url: result.invoiceUrl }],
+            [{ text: TEXTS.BTN_CANCEL_METHOD_CHANGE, callback_data: `cancel_method_change:${orderReference}` }],
           ],
         },
       },
@@ -312,16 +291,16 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
     const telegramId = ctx.from!.id;
     const activeSub = await getActiveSubscription(telegramId);
     if (activeSub) {
-      await ctx.editMessageText(buildActiveText(activeSub), { reply_markup: ACTIVE_KEYBOARD });
+      await ctx.editMessageText(buildActiveText(activeSub), { reply_markup: activeKeyboard() });
     } else {
       const cancelledSub = await getCancelledSubscription(telegramId);
       if (cancelledSub) {
-        await ctx.editMessageText(buildCancelledText(cancelledSub), { reply_markup: CANCELLED_KEYBOARD });
+        await ctx.editMessageText(buildCancelledText(cancelledSub), { reply_markup: cancelledKeyboard() });
       } else {
         await ctx.editMessageText(TEXTS.NO_SUBSCRIPTION, {
           reply_markup: {
             inline_keyboard: [
-              [{ text: '\u{1F4CB} Оформити підписку', callback_data: 'subscription' }],
+              [{ text: TEXTS.BTN_SUBSCRIBE, callback_data: 'subscription' }],
             ],
           },
         });
@@ -353,10 +332,10 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
     const planKey = `${activeSub.method}_${showDuration}`;
     const price = prices?.[planKey];
     const priceText = price ? `${price.amount} ${price.currency}` : '';
-    const methodLabel = activeSub.method === 'card' ? '\u{1F4B3} Картка' : '\u{26A1} USDT';
+    const methodLabel = activeSub.method === 'card' ? TEXTS.METHOD_LABEL_CARD : TEXTS.METHOD_LABEL_USDT;
 
     const durations = ['1m', '6m', '12m'];
-    const durationLabels: Record<string, string> = { '1m': '1 місяць', '6m': '6 місяців', '12m': '12 місяців' };
+    const durationLabels: Record<string, string> = { '1m': TEXTS.DURATION_1M, '6m': TEXTS.DURATION_6M, '12m': TEXTS.DURATION_12M };
 
     // Other plan buttons — use display_name from prices snapshot (same format as tariff keyboard)
     const planButtons = durations
@@ -371,11 +350,11 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
 
     const actionButtons = isCurrentPlan
       ? []
-      : [[{ text: '\u{2705} Змінити', callback_data: `sub:set_plan:${showDuration}` }]];
+      : [[{ text: TEXTS.BTN_CHANGE_CONFIRM, callback_data: `sub:set_plan:${showDuration}` }]];
 
     const backCallback = isCurrentPlan ? 'sub:manage' : 'sub:change_plan';
 
-    const header = isCurrentPlan ? '\u{1F4DD} Зміна плану\n\nПоточна підписка:\n\n' : '\u{1F4DD} Зміна плану\n\n';
+    const header = isCurrentPlan ? TEXTS.CHANGE_PLAN_CURRENT : TEXTS.CHANGE_PLAN_OTHER;
 
     await ctx.editMessageText(
       `${header}` +
@@ -384,14 +363,14 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
       `\u{1F4B0} Сума: ${priceText}\n` +
       `\u{1F4B3} Метод оплати: ${methodLabel}\n` +
       `\u{1F5D3}\u{FE0F} Дата наступного платежу: ${formatDate(new Date(activeSub.expires_at))}\n\n` +
-      (isCurrentPlan ? 'Доступні плани:' : 'Зміна діє з наступного продовження.'),
+      (isCurrentPlan ? TEXTS.AVAILABLE_PLANS : TEXTS.PLAN_CHANGE_EFFECTIVE),
       {
         parse_mode: 'HTML',
         reply_markup: {
           inline_keyboard: [
             ...actionButtons,
             ...(isCurrentPlan ? planButtons : []),
-            [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: backCallback }],
+            [{ text: TEXTS.BTN_BACK, callback_data: backCallback }],
           ],
         },
       },
@@ -410,24 +389,24 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
     const newPlan = `${activeSub.method}_${newDuration}`;
 
     if (newPlan === activeSub.plan) {
-      await ctx.editMessageText(buildActiveText(activeSub), { reply_markup: ACTIVE_KEYBOARD });
+      await ctx.editMessageText(buildActiveText(activeSub), { reply_markup: activeKeyboard() });
       return;
     }
 
     const sub = await changeSubscriptionPlan(telegramId, newPlan);
 
     if (!sub) {
-      await ctx.editMessageText('Не вдалося змінити план. Спробуй ще раз.', {
+      await ctx.editMessageText(TEXTS.CHANGE_PLAN_ERROR, {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:manage' }],
+            [{ text: TEXTS.BTN_BACK, callback_data: 'sub:manage' }],
           ],
         },
       });
       return;
     }
 
-    const durationLabels: Record<string, string> = { '1m': '1 місяць', '6m': '6 місяців', '12m': '12 місяців' };
+    const durationLabels: Record<string, string> = { '1m': TEXTS.DURATION_1M, '6m': TEXTS.DURATION_6M, '12m': TEXTS.DURATION_12M };
     const newLabel = durationLabels[newDuration] ?? newDuration;
     const prices = sub.prices as Record<string, { amount?: number; currency?: string }> | null;
     const price = prices?.[newPlan];
@@ -436,14 +415,11 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
     logger.info('Subscription plan changed', { telegramId, oldPlan: activeSub.plan, newPlan });
 
     await ctx.editMessageText(
-      `\u{2705} План змінено!\n\n` +
-      `Новий план: ${newLabel}\n` +
-      `Сума наступного платежу: ${priceText}\n` +
-      `Дата наступного платежу: ${formatDate(new Date(sub.expires_at))}`,
+      fillSubTemplate(TEXTS.PLAN_CHANGED_SUCCESS, { planLabel: newLabel, priceText, expiresDate: formatDate(new Date(sub.expires_at)) }),
       {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '\u{1F4CB} Моя підписка', callback_data: 'sub:back' }],
+            [{ text: TEXTS.BTN_MY_SUB_INLINE, callback_data: 'sub:back' }],
           ],
         },
       },
@@ -460,12 +436,11 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
 
     if (activeSub.method === 'crypto') {
       await ctx.editMessageText(
-        '\u{1F4B3} Зміна картки\n\n' +
-        'У тебе активна підписка з оплатою USDT. Змінити картку можна тільки якщо підписка оплачена карткою.',
+        TEXTS.CHANGE_CARD_CRYPTO_ONLY,
         {
           reply_markup: {
             inline_keyboard: [
-              [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:manage' }],
+              [{ text: TEXTS.BTN_BACK, callback_data: 'sub:manage' }],
             ],
           },
         },
@@ -473,18 +448,15 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
       return;
     }
 
-    const currentCard = activeSub.card_pan ?? 'не збережена';
+    const currentCard = activeSub.card_pan ?? TEXTS.CARD_NOT_SAVED;
 
     await ctx.editMessageText(
-      `\u{1F4B3} Зміна картки\n\n` +
-      `Поточна картка: ${currentCard}\n\n` +
-      `Щоб додати нову картку, буде списано 1 грн (обмеження платіжної системи).\n\n` +
-      `Наступне автоматичне продовження буде з нової картки.`,
+      TEXTS.CHANGE_CARD_TEXT.replace('{cardPan}', currentCard),
       {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '\u{1F4B3} Додати нову картку', callback_data: 'sub:new_card' }],
-            [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:manage' }],
+            [{ text: TEXTS.BTN_ADD_NEW_CARD, callback_data: 'sub:new_card' }],
+            [{ text: TEXTS.BTN_BACK, callback_data: 'sub:manage' }],
           ],
         },
       },
@@ -498,11 +470,11 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
 
     if (await hasPendingCardTransaction(telegramId)) {
       await ctx.editMessageText(
-        'У тебе вже є активний платіж. Скористайся попереднім посиланням або зачекай 10 хвилин.',
+        TEXTS.PENDING_CARD_PAYMENT,
         {
           reply_markup: {
             inline_keyboard: [
-              [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:manage' }],
+              [{ text: TEXTS.BTN_BACK, callback_data: 'sub:manage' }],
             ],
           },
         },
@@ -532,11 +504,11 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
     if (!result.success || !result.invoiceUrl) {
       logger.error('Failed to create card change invoice', { orderReference, reason: result.reason });
       await ctx.editMessageText(
-        '\u{26A0}\u{FE0F} Зміна картки тимчасово недоступна. Спробуй пізніше.',
+        TEXTS.CHANGE_CARD_UNAVAILABLE,
         {
           reply_markup: {
             inline_keyboard: [
-              [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'sub:manage' }],
+              [{ text: TEXTS.BTN_BACK, callback_data: 'sub:manage' }],
             ],
           },
         },
@@ -545,15 +517,12 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
     }
 
     const msg = await ctx.editMessageText(
-      '\u{1F4B3} Зміна картки\n\n' +
-      'Натисни кнопку нижче та введи дані нової картки.\n' +
-      'Вартість: 1 грн (обмеження платіжної системи).\n\n' +
-      '\u{23F3} Посилання дійсне 10 хвилин',
+      TEXTS.CHANGE_CARD_INVOICE,
       {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '\u{1F4B3} Додати нову картку', url: result.invoiceUrl }],
-            [{ text: '\u{274C} Скасувати зміну картки', callback_data: `cancel_card_change:${orderReference}` }],
+            [{ text: TEXTS.BTN_ADD_NEW_CARD, url: result.invoiceUrl }],
+            [{ text: TEXTS.BTN_CANCEL_CARD_CHANGE, callback_data: `cancel_card_change:${orderReference}` }],
           ],
         },
       },
@@ -576,16 +545,16 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
     const telegramId = ctx.from!.id;
     const activeSub = await getActiveSubscription(telegramId);
     if (activeSub) {
-      await ctx.editMessageText(buildActiveText(activeSub), { reply_markup: ACTIVE_KEYBOARD });
+      await ctx.editMessageText(buildActiveText(activeSub), { reply_markup: activeKeyboard() });
     } else {
       const cancelledSub = await getCancelledSubscription(telegramId);
       if (cancelledSub) {
-        await ctx.editMessageText(buildCancelledText(cancelledSub), { reply_markup: CANCELLED_KEYBOARD });
+        await ctx.editMessageText(buildCancelledText(cancelledSub), { reply_markup: cancelledKeyboard() });
       } else {
         await ctx.editMessageText(TEXTS.NO_SUBSCRIPTION, {
           reply_markup: {
             inline_keyboard: [
-              [{ text: '\u{1F4CB} Оформити підписку', callback_data: 'subscription' }],
+              [{ text: TEXTS.BTN_SUBSCRIBE, callback_data: 'subscription' }],
             ],
           },
         });
@@ -597,11 +566,8 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
   bot.action('sub:cancel', async (ctx) => {
     await ctx.answerCbQuery();
     await ctx.editMessageText(
-      '\u{26A0}\u{FE0F} Ти впевнений, що хочеш скасувати підписку?\n\n' +
-      'Доступ до контенту і каналів залишиться до кінця оплаченого періоду.\n' +
-      'Гроші за підписку не повертаються.\n\n' +
-      'Ти зможеш відновити підписку в будь-який момент до закінчення терміну.',
-      { reply_markup: CANCEL_CONFIRM_KEYBOARD },
+      TEXTS.CANCEL_SUBSCRIPTION_CONFIRM,
+      { reply_markup: cancelConfirmKeyboard() },
     );
   });
 
@@ -610,21 +576,19 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
     await ctx.answerCbQuery();
     const sub = await cancelSubscription(ctx.from!.id);
     if (!sub) {
-      await ctx.editMessageText('Підписку не знайдено або вона вже скасована.');
+      await ctx.editMessageText(TEXTS.SUBSCRIPTION_NOT_FOUND_OR_CANCELLED);
       return;
     }
 
     logger.info('Subscription cancelled by user', { telegramId: ctx.from!.id, subscriptionId: sub.id });
 
-    await ctx.editMessageText(buildCancelledText(sub), { reply_markup: CANCELLED_KEYBOARD });
+    await ctx.editMessageText(buildCancelledText(sub), { reply_markup: cancelledKeyboard() });
 
     // Send a separate notification message so the user sees it even if they closed the chat
     const expiresDate = formatDate(sub.expires_at);
     try {
       await ctx.reply(
-        `\u{1F514} Твою підписку скасовано.\n\n` +
-        `Доступ до клубу залишається до ${expiresDate}.\n` +
-        `Якщо передумаєш — віднови підписку в меню "Моя підписка".`,
+        TEXTS.SUB_CANCELLED_NOTIFICATION.replace('{expiresDate}', expiresDate),
       );
     } catch { /* ignore if reply fails */ }
   });
@@ -634,20 +598,18 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
     await ctx.answerCbQuery();
     const sub = await reactivateSubscription(ctx.from!.id);
     if (!sub) {
-      await ctx.editMessageText('Підписку не знайдено або термін вже закінчився.');
+      await ctx.editMessageText(TEXTS.SUBSCRIPTION_NOT_FOUND_OR_EXPIRED);
       return;
     }
 
     logger.info('Subscription reactivated by user', { telegramId: ctx.from!.id, subscriptionId: sub.id });
 
     await ctx.editMessageText(
-      `\u{2705} Підписку відновлено!\n\n` +
-      `Раді, що ти з нами \u{1F4AA}\n\n` +
-      `Твоя підписка активна \u{1F680}`,
+      TEXTS.SUBSCRIPTION_REACTIVATED,
       {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '\u{1F4CB} Перевірити підписку', callback_data: 'sub:back' }],
+            [{ text: TEXTS.BTN_CHECK_SUBSCRIPTION, callback_data: 'sub:back' }],
           ],
         },
       },
@@ -661,20 +623,20 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
 
     const activeSub = await getActiveSubscription(telegramId);
     if (activeSub) {
-      await ctx.editMessageText(buildActiveText(activeSub), { reply_markup: ACTIVE_KEYBOARD });
+      await ctx.editMessageText(buildActiveText(activeSub), { reply_markup: activeKeyboard() });
       return;
     }
 
     const cancelledSub = await getCancelledSubscription(telegramId);
     if (cancelledSub) {
-      await ctx.editMessageText(buildCancelledText(cancelledSub), { reply_markup: CANCELLED_KEYBOARD });
+      await ctx.editMessageText(buildCancelledText(cancelledSub), { reply_markup: cancelledKeyboard() });
       return;
     }
 
     await ctx.editMessageText(TEXTS.NO_SUBSCRIPTION, {
       reply_markup: {
         inline_keyboard: [
-          [{ text: '\u{1F4CB} Оформити підписку', callback_data: 'subscription' }],
+          [{ text: TEXTS.BTN_SUBSCRIBE, callback_data: 'subscription' }],
         ],
       },
     });

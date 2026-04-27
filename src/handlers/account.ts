@@ -24,29 +24,26 @@ async function buildAccountText(
   const activeSub = await getActiveSubscription(user.id);
   const cancelledSub = !activeSub ? await getCancelledSubscription(user.id) : null;
   const subscriptionStatus = activeSub
-    ? '\u{2705} Активна'
+    ? TEXTS.ACCOUNT_SUBSCRIPTION_ACTIVE
     : cancelledSub
-      ? '\u{26A0}\u{FE0F} Скасована'
-      : '\u{274C} Немає';
+      ? TEXTS.ACCOUNT_SUBSCRIPTION_CANCELLED
+      : TEXTS.ACCOUNT_SUBSCRIPTION_NONE;
 
-  return [
-    '<b>👤 Мій акаунт</b>',
-    '',
-    `Telegram ID: <code>${user.id}</code>`,
-    `Ім'я: ${escapeHtml(user.first_name)}${user.last_name ? ' ' + escapeHtml(user.last_name) : ''}`,
-    `Username: ${user.username ? '@' + escapeHtml(user.username) : 'не вказано'}`,
-    `Email: ${email ? escapeHtml(email) : 'не вказано'}`,
-    `Підписка: ${subscriptionStatus}`,
-  ].join('\n');
+  return TEXTS.ACCOUNT_INFO
+    .replace('{title}', TEXTS.ACCOUNT_TITLE)
+    .replace('{telegramId}', String(user.id))
+    .replace('{name}', `${escapeHtml(user.first_name)}${user.last_name ? ' ' + escapeHtml(user.last_name) : ''}`)
+    .replace('{username}', user.username ? '@' + escapeHtml(user.username) : TEXTS.ACCOUNT_NOT_SET)
+    .replace('{email}', email ? escapeHtml(email) : TEXTS.ACCOUNT_NOT_SET)
+    .replace('{subscriptionStatus}', subscriptionStatus);
 }
 
 function buildEmailFormText(error?: string) {
   const lines = [
-    '<b>👤 Мій акаунт</b>',
-    'Додавання емейлу',
+    TEXTS.ACCOUNT_TITLE,
+    TEXTS.ACCOUNT_EMAIL_FORM_TITLE,
     '',
-    'Введіть Email в форматі:',
-    'name@gmail.com',
+    TEXTS.ACCOUNT_EMAIL_FORM_INSTRUCTION,
   ];
 
   if (error) {
@@ -60,11 +57,11 @@ function buildEmailFormText(error?: string) {
 function buildAccountKeyboard(hasEmail: boolean, isCancelled: boolean) {
   const row = [
     hasEmail
-      ? { text: '\u{270F}\u{FE0F} Змінити email', callback_data: 'change_email' }
-      : { text: '\u{1F4E7} Додати email', callback_data: 'add_email' },
+      ? { text: TEXTS.BTN_CHANGE_EMAIL, callback_data: 'change_email' }
+      : { text: TEXTS.BTN_ADD_EMAIL, callback_data: 'add_email' },
   ];
   if (isCancelled) {
-    row.push({ text: '\u{2705} Відновити підписку', callback_data: 'sub:reactivate' });
+    row.push({ text: TEXTS.BTN_REACTIVATE, callback_data: 'sub:reactivate' });
   }
   return { inline_keyboard: [row] };
 }
@@ -100,7 +97,7 @@ export function registerAccountHandler(bot: Telegraf) {
       parse_mode: 'HTML',
       reply_markup: {
         inline_keyboard: [
-          [{ text: '❌ Скасувати', callback_data: 'cancel_email' }],
+          [{ text: TEXTS.BTN_CANCEL_EMAIL, callback_data: 'cancel_email' }],
         ],
       },
     });
@@ -142,7 +139,7 @@ export function registerAccountHandler(bot: Telegraf) {
 
         // Show success, then revert to account info
         await ctx.telegram.editMessageText(chatId, messageId, undefined,
-          buildEmailFormText() + '\n\n✅ Email збережено!',
+          buildEmailFormText() + '\n\n' + TEXTS.ACCOUNT_EMAIL_SAVED_INLINE,
           { parse_mode: 'HTML' },
         );
 
@@ -165,12 +162,12 @@ export function registerAccountHandler(bot: Telegraf) {
       } else {
         // Show error in the same form message
         await ctx.telegram.editMessageText(chatId, messageId, undefined,
-          buildEmailFormText('Невірний формат email. Спробуй ще раз'),
+          buildEmailFormText(TEXTS.ACCOUNT_EMAIL_INVALID_INLINE),
           {
             parse_mode: 'HTML',
             reply_markup: {
               inline_keyboard: [
-                [{ text: '❌ Скасувати', callback_data: 'cancel_email' }],
+                [{ text: TEXTS.BTN_CANCEL_EMAIL, callback_data: 'cancel_email' }],
               ],
             },
           },

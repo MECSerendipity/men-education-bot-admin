@@ -22,7 +22,7 @@ export function registerNavigationHandlers(bot: Telegraf) {
   // Fallback — catch any unhandled message (groups already filtered by middleware)
   bot.on('message', async (ctx) => {
     const isSubscribed = await hasActiveSubscription(ctx.from.id);
-    await ctx.reply('\u{1F9E0} Мій мозок це не обробляє. Скористайся меню \u{1F447}', {
+    await ctx.reply(TEXTS.UNHANDLED_MESSAGE, {
       reply_markup: buildMainMenuKeyboard(isSubscribed),
     });
   });

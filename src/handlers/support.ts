@@ -8,7 +8,7 @@ export function registerSupportHandler(bot: Telegraf) {
     await ctx.reply(TEXTS.SUPPORT, {
       reply_markup: {
         inline_keyboard: [
-          [{ text: '📩 Написати в підтримку', url: SUPPORT_URL }],
+          [{ text: TEXTS.BTN_WRITE_SUPPORT, url: SUPPORT_URL }],
         ],
       },
     });

@@ -26,11 +26,11 @@ async function requireSubscription(ctx: any): Promise<boolean> {
   if (!isSubscribed) {
     const cancelledSub = await getCancelledSubscription(ctx.from.id);
     const button = cancelledSub
-      ? { text: '\u{2705} Відновити підписку', callback_data: 'sub:reactivate' }
-      : { text: 'Оформити підписку', callback_data: 'subscription' };
+      ? { text: TEXTS.BTN_REACTIVATE, callback_data: 'sub:reactivate' }
+      : { text: TEXTS.BTN_SUBSCRIBE_PARTNER, callback_data: 'subscription' };
 
     await ctx.editMessageText(
-      'Реферальна система доступна тільки для користувачів з активною підпискою.',
+      TEXTS.PARTNER_SUBSCRIPTION_REQUIRED,
       {
         reply_markup: {
           inline_keyboard: [[button]],
@@ -52,11 +52,11 @@ export function registerPartnerHandler(bot: Telegraf) {
     if (!isSubscribed) {
       const cancelledSub = await getCancelledSubscription(telegramId);
       const button = cancelledSub
-        ? { text: '\u{2705} Відновити підписку', callback_data: 'sub:reactivate' }
-        : { text: 'Оформити підписку', callback_data: 'subscription' };
+        ? { text: TEXTS.BTN_REACTIVATE, callback_data: 'sub:reactivate' }
+        : { text: TEXTS.BTN_SUBSCRIBE_PARTNER, callback_data: 'subscription' };
 
       await ctx.reply(
-        'Реферальна система доступна тільки для користувачів з активною підпискою.',
+        TEXTS.PARTNER_SUBSCRIPTION_REQUIRED,
         {
           reply_markup: {
             inline_keyboard: [[button]],
@@ -78,18 +78,17 @@ export function registerPartnerHandler(bot: Telegraf) {
     const username = await getBotUsername(bot);
     const link = `https://t.me/${username}?start=${refCode}`;
 
-    const shareText = encodeURIComponent(`Приєднуйся до Men Education Club!\n${link}`);
+    const shareText = encodeURIComponent(`${TEXTS.SHARE_TEXT}\n${link}`);
     const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${shareText}`;
 
     await ctx.editMessageText(
-      `\u{1F517} *Твоє реферальне посилання:*\n\n\`${link}\`\n\n` +
-      'Скопіюй посилання або натисни "Поділитися" щоб надіслати другу.',
+      TEXTS.PARTNER_REFERRAL_LINK.replace('{link}', link),
       {
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [
-            [{ text: '\u{1F4E4} Поділитися', url: shareUrl }],
-            [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'partner:menu' }],
+            [{ text: TEXTS.BTN_SHARE_REFERRAL, url: shareUrl }],
+            [{ text: TEXTS.BTN_BACK, callback_data: 'partner:menu' }],
           ],
         },
       },
@@ -105,20 +104,19 @@ export function registerPartnerHandler(bot: Telegraf) {
 
     const paid = stats.active + stats.inactive;
 
-    let earningsText = 'Мої нарахування:\n';
-    earningsText += `- Всього зароблено: ${stats.totalEarnedUah.toFixed(2)} UAH | Виведено: ${stats.totalWithdrawnUah.toFixed(2)} UAH\n`;
-    earningsText += `- Всього зароблено: ${stats.totalEarnedUsdt.toFixed(2)} USDT | Виведено: ${stats.totalWithdrawnUsdt.toFixed(2)} USDT`;
-
     await ctx.editMessageText(
-      `\u{1F4C8} Статистика\n\n` +
-      `Перейшли за посиланням: ${stats.clicks}\n` +
-      `Оплатили підписку: ${paid}\n` +
-      `Активні реферали: ${stats.active}\n\n` +
-      earningsText,
+      TEXTS.PARTNER_STATS
+        .replace('{clicks}', String(stats.clicks))
+        .replace('{paid}', String(paid))
+        .replace('{active}', String(stats.active))
+        .replace('{earnedUah}', stats.totalEarnedUah.toFixed(2))
+        .replace('{withdrawnUah}', stats.totalWithdrawnUah.toFixed(2))
+        .replace('{earnedUsdt}', stats.totalEarnedUsdt.toFixed(2))
+        .replace('{withdrawnUsdt}', stats.totalWithdrawnUsdt.toFixed(2)),
       {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'partner:menu' }],
+            [{ text: TEXTS.BTN_BACK, callback_data: 'partner:menu' }],
           ],
         },
       },
@@ -140,15 +138,15 @@ export function registerPartnerHandler(bot: Telegraf) {
 
     if (pendingWithdrawal) {
       await ctx.editMessageText(
-        `\u{1F911} Баланс\n\n` +
-        `Доступний баланс в UAH: ${balance.uah.toFixed(2)}\n` +
-        `Доступний баланс в USDT: ${balance.usdt.toFixed(2)}\n\n` +
-        `\u{23F3} Активний запит на виведення: ${Number(pendingWithdrawal.amount).toFixed(2)} ${pendingWithdrawal.currency}\n\n` +
-        `Очікуйте підтвердження від адміністратора.`,
+        TEXTS.PARTNER_BALANCE_PENDING
+          .replace('{balanceUah}', balance.uah.toFixed(2))
+          .replace('{balanceUsdt}', balance.usdt.toFixed(2))
+          .replace('{pendingAmount}', Number(pendingWithdrawal.amount).toFixed(2))
+          .replace('{pendingCurrency}', pendingWithdrawal.currency),
         {
           reply_markup: {
             inline_keyboard: [
-              [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'partner:menu' }],
+              [{ text: TEXTS.BTN_BACK, callback_data: 'partner:menu' }],
             ],
           },
         },
@@ -157,18 +155,19 @@ export function registerPartnerHandler(bot: Telegraf) {
     }
 
     await ctx.editMessageText(
-      `\u{1F911} Баланс\n\n` +
-      `Доступний баланс в UAH: ${balance.uah.toFixed(2)}\n` +
-      `Доступний баланс в USDT: ${balance.usdt.toFixed(2)}\n\n` +
-      `Мінімальна сума виведення: ${config.min_withdrawal_uah} UAH | ${config.min_withdrawal_usdt} USDT`,
+      TEXTS.PARTNER_BALANCE
+        .replace('{balanceUah}', balance.uah.toFixed(2))
+        .replace('{balanceUsdt}', balance.usdt.toFixed(2))
+        .replace('{minUah}', String(config.min_withdrawal_uah))
+        .replace('{minUsdt}', String(config.min_withdrawal_usdt)),
       {
         reply_markup: {
           inline_keyboard: [
             [
-              { text: '\u{1F4B4} Вивести UAH', callback_data: 'partner:withdraw:uah' },
-              { text: '\u{1F4B5} Вивести USDT', callback_data: 'partner:withdraw:usdt' },
+              { text: TEXTS.BTN_WITHDRAW_UAH, callback_data: 'partner:withdraw:uah' },
+              { text: TEXTS.BTN_WITHDRAW_USDT, callback_data: 'partner:withdraw:usdt' },
             ],
-            [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'partner:menu' }],
+            [{ text: TEXTS.BTN_BACK, callback_data: 'partner:menu' }],
           ],
         },
       },
@@ -183,10 +182,10 @@ export function registerPartnerHandler(bot: Telegraf) {
     const day = new Date().getDate();
     if (day < 10 || day > 20) {
       await ctx.editMessageText(
-        `Заявку на виведення можна подати тільки з 10 по 20 число кожного місяця.`,
+        TEXTS.WITHDRAW_DATE_RESTRICTION,
         {
           reply_markup: {
-            inline_keyboard: [[{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'partner:balance' }]],
+            inline_keyboard: [[{ text: TEXTS.BTN_BACK, callback_data: 'partner:balance' }]],
           },
         },
       );
@@ -198,11 +197,12 @@ export function registerPartnerHandler(bot: Telegraf) {
 
     if (balance.uah < config.min_withdrawal_uah) {
       await ctx.editMessageText(
-        `Недостатньо коштів для виведення.\n\n` +
-        `Мінімальна сума виведення: ${config.min_withdrawal_uah} UAH | ${config.min_withdrawal_usdt} USDT`,
+        TEXTS.WITHDRAW_INSUFFICIENT
+          .replace('{minUah}', String(config.min_withdrawal_uah))
+          .replace('{minUsdt}', String(config.min_withdrawal_usdt)),
         {
           reply_markup: {
-            inline_keyboard: [[{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'partner:balance' }]],
+            inline_keyboard: [[{ text: TEXTS.BTN_BACK, callback_data: 'partner:balance' }]],
           },
         },
       );
@@ -210,13 +210,12 @@ export function registerPartnerHandler(bot: Telegraf) {
     }
 
     await ctx.editMessageText(
-      `\u{1F4B4} Вивести ${balance.uah.toFixed(2)} UAH?\n\n` +
-      `Після підтвердження ME Допомога зв'яжеться з тобою протягом 24 годин.`,
+      TEXTS.WITHDRAW_CONFIRM.replace('{amount}', balance.uah.toFixed(2)).replace('{currency}', 'UAH'),
       {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '\u{2705} Підтвердити виведення', callback_data: `partner:withdraw_confirm:uah:${balance.uah.toFixed(2)}` }],
-            [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'partner:balance' }],
+            [{ text: TEXTS.BTN_CONFIRM_WITHDRAWAL, callback_data: `partner:withdraw_confirm:uah:${balance.uah.toFixed(2)}` }],
+            [{ text: TEXTS.BTN_BACK, callback_data: 'partner:balance' }],
           ],
         },
       },
@@ -231,10 +230,10 @@ export function registerPartnerHandler(bot: Telegraf) {
     const day = new Date().getDate();
     if (day < 10 || day > 20) {
       await ctx.editMessageText(
-        `Заявку на виведення можна подати тільки з 10 по 20 число кожного місяця.`,
+        TEXTS.WITHDRAW_DATE_RESTRICTION,
         {
           reply_markup: {
-            inline_keyboard: [[{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'partner:balance' }]],
+            inline_keyboard: [[{ text: TEXTS.BTN_BACK, callback_data: 'partner:balance' }]],
           },
         },
       );
@@ -246,11 +245,12 @@ export function registerPartnerHandler(bot: Telegraf) {
 
     if (balance.usdt < config.min_withdrawal_usdt) {
       await ctx.editMessageText(
-        `Недостатньо коштів для виведення.\n\n` +
-        `Мінімальна сума виведення: ${config.min_withdrawal_uah} UAH | ${config.min_withdrawal_usdt} USDT`,
+        TEXTS.WITHDRAW_INSUFFICIENT
+          .replace('{minUah}', String(config.min_withdrawal_uah))
+          .replace('{minUsdt}', String(config.min_withdrawal_usdt)),
         {
           reply_markup: {
-            inline_keyboard: [[{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'partner:balance' }]],
+            inline_keyboard: [[{ text: TEXTS.BTN_BACK, callback_data: 'partner:balance' }]],
           },
         },
       );
@@ -258,13 +258,12 @@ export function registerPartnerHandler(bot: Telegraf) {
     }
 
     await ctx.editMessageText(
-      `\u{1F4B5} Вивести ${balance.usdt.toFixed(2)} USDT?\n\n` +
-      `Після підтвердження ME Допомога зв'яжеться з тобою протягом 24 годин.`,
+      TEXTS.WITHDRAW_CONFIRM.replace('{amount}', balance.usdt.toFixed(2)).replace('{currency}', 'USDT'),
       {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '\u{2705} Підтвердити виведення', callback_data: `partner:withdraw_confirm:usdt:${balance.usdt.toFixed(2)}` }],
-            [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'partner:balance' }],
+            [{ text: TEXTS.BTN_CONFIRM_WITHDRAWAL, callback_data: `partner:withdraw_confirm:usdt:${balance.usdt.toFixed(2)}` }],
+            [{ text: TEXTS.BTN_BACK, callback_data: 'partner:balance' }],
           ],
         },
       },
@@ -281,11 +280,10 @@ export function registerPartnerHandler(bot: Telegraf) {
     try {
       const withdrawal = await createWithdrawalRequest(telegramId, amount, currency);
       await ctx.editMessageText(
-        `\u{2705} Запит на виведення ${amount.toFixed(2)} ${currency} створено.\n\n` +
-        `Очікуйте підтвердження від адміністратора.`,
+        TEXTS.WITHDRAW_REQUEST_CREATED.replace('{amount}', amount.toFixed(2)).replace('{currency}', currency),
         {
           reply_markup: {
-            inline_keyboard: [[{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'partner:menu' }]],
+            inline_keyboard: [[{ text: TEXTS.BTN_BACK, callback_data: 'partner:menu' }]],
           },
         },
       );
@@ -328,10 +326,10 @@ export function registerPartnerHandler(bot: Telegraf) {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       await ctx.editMessageText(
-        `Не вдалося створити запит: ${message}`,
+        TEXTS.WITHDRAWAL_CREATE_ERROR,
         {
           reply_markup: {
-            inline_keyboard: [[{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'partner:balance' }]],
+            inline_keyboard: [[{ text: TEXTS.BTN_BACK, callback_data: 'partner:balance' }]],
           },
         },
       );
@@ -351,14 +349,14 @@ export function registerPartnerHandler(bot: Telegraf) {
     );
     const withdrawal = txResult.rows[0];
     if (!withdrawal) {
-      await ctx.answerCbQuery('Цей запит вже оброблено');
+      await ctx.answerCbQuery(TEXTS.WITHDRAWAL_ALREADY_PROCESSED);
       return;
     }
 
     const success = await processWithdrawal(withdrawalId, approved);
 
     if (!success) {
-      await ctx.answerCbQuery('Цей запит вже оброблено');
+      await ctx.answerCbQuery(TEXTS.WITHDRAWAL_ALREADY_PROCESSED);
       return;
     }
 
@@ -394,16 +392,16 @@ export function registerPartnerHandler(bot: Telegraf) {
       if (approved) {
         await bot.telegram.sendMessage(
           withdrawal.partner_id,
-          `\u{2705} Виведення ${amount} ${currency} схвалено.\n\nME Допомога зв'яжеться з тобою протягом 24 годин.`,
+          TEXTS.WITHDRAW_APPROVED.replace('{amount}', amount).replace('{currency}', currency),
         );
       } else {
         await bot.telegram.sendMessage(
           withdrawal.partner_id,
-          `\u{274C} Виведення ${amount} ${currency} відхилено.\n\nКошти повернуто на баланс.`,
+          TEXTS.WITHDRAW_REJECTED.replace('{amount}', amount).replace('{currency}', currency),
           {
             reply_markup: {
               inline_keyboard: [
-                [{ text: '\u{1F4E9} Написати в підтримку', url: SUPPORT_URL }],
+                [{ text: TEXTS.BTN_WRITE_SUPPORT_PARTNER, url: SUPPORT_URL }],
               ],
             },
           },
@@ -421,10 +419,10 @@ export function registerPartnerHandler(bot: Telegraf) {
 
     if (referrals.length === 0) {
       await ctx.editMessageText(
-        '\u{1F465} Мої реферали\n\nУ тебе ще немає рефералів.\nНадсилай реферальне посилання друзям!',
+        TEXTS.PARTNER_NO_REFERRALS,
         {
           reply_markup: {
-            inline_keyboard: [[{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'partner:menu' }]],
+            inline_keyboard: [[{ text: TEXTS.BTN_BACK, callback_data: 'partner:menu' }]],
           },
         },
       );
@@ -436,16 +434,15 @@ export function registerPartnerHandler(bot: Telegraf) {
     const paid = active + inactive;
 
     await ctx.editMessageText(
-      `\u{1F465} Мої реферали\n\n` +
-      `Перейшли за посиланням: ${referrals.length}\n` +
-      `Оплатили: ${paid}\n` +
-      `Активні реферали: ${active}\n\n` +
-      `Завантаж звіт щоб переглянути детальну інформацію по кожному рефералу.`,
+      TEXTS.PARTNER_REFERRALS_LIST
+        .replace('{total}', String(referrals.length))
+        .replace('{paid}', String(paid))
+        .replace('{active}', String(active)),
       {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '\u{1F4CB} Завантажити список', callback_data: 'partner:referrals_csv' }],
-            [{ text: '\u{2B05}\u{FE0F} Назад', callback_data: 'partner:menu' }],
+            [{ text: TEXTS.BTN_DOWNLOAD_REFERRALS, callback_data: 'partner:referrals_csv' }],
+            [{ text: TEXTS.BTN_BACK, callback_data: 'partner:menu' }],
           ],
         },
       },
@@ -513,33 +510,22 @@ async function showPartnerMenu(bot: Telegraf, ctx: any): Promise<void> {
   const config = await getPartnerConfig();
   const link = `https://t.me/${username}?start=${refCode}`;
 
-  const firstPct = config.first_enabled ? `${config.first_percent}%` : 'вимкнено';
-  const recurPct = config.recurring_enabled ? `${config.recurring_percent}%` : 'вимкнено';
+  const firstPct = config.first_enabled ? `${config.first_percent}%` : TEXTS.COMMISSION_DISABLED;
+  const recurPct = config.recurring_enabled ? `${config.recurring_percent}%` : TEXTS.COMMISSION_DISABLED;
 
-  const text =
-    '\u{1F680} *Реферальна система*\n\n' +
-    'Заробляй разом з Men Education Club!\n' +
-    'Просто поділись посиланням — і отримуй реальні гроші з кожної оплати.\n\n' +
-    '\u{1F4B0} *Як це працює:*\n\n' +
-    `\u{2705} ${firstPct} з першої оплати реферала\n` +
-    `\u{2705} ${recurPct} з кожного автопродовження\n` +
-    '\u{2705} Нарахування в UAH або USDT — залежно від способу оплати реферала\n' +
-    '\u{2705} Поки реферал продовжує підписку — ти заробляєш пасивно\n\n' +
-    '\u{1F4CB} *Правила:*\n\n' +
-    '- Комісія нараховується з кожної успішної оплати реферала\n' +
-    '- Якщо реферал не перериває підписку — ти отримуєш % з кожного продовження\n' +
-    '- Якщо реферал припиняє оплату та покидає клуб — нарахування зупиняються\n' +
-    '- Виведення доступне при досягненні мінімальної суми\n\n' +
-    'Надсилай посилання друзям, знайомим, у соцмережі — сиди та заробляй без зусиль.';
+  const text = TEXTS.PARTNER_MENU_TEXT
+    .replace('{firstPct}', firstPct)
+    .replace('{recurPct}', recurPct) +
+    '\n\n' + TEXTS.PARTNER_CONTENT_CHANNEL;
 
   const keyboard = {
     parse_mode: 'Markdown' as const,
     reply_markup: {
       inline_keyboard: [
-        [{ text: '\u{1F517} Моє реферальне посилання', callback_data: 'partner:link' }],
-        [{ text: '\u{1F465} Мої реферали', callback_data: 'partner:referrals' }],
-        [{ text: '\u{1F911} Баланс', callback_data: 'partner:balance' }],
-        [{ text: '\u{1F4C8} Статистика', callback_data: 'partner:stats' }],
+        [{ text: TEXTS.BTN_MY_REFERRAL_LINK, callback_data: 'partner:link' }],
+        [{ text: TEXTS.BTN_MY_REFERRALS, callback_data: 'partner:referrals' }],
+        [{ text: TEXTS.BTN_BALANCE, callback_data: 'partner:balance' }],
+        [{ text: TEXTS.BTN_STATS, callback_data: 'partner:stats' }],
       ],
     },
   };

@@ -6,6 +6,7 @@ import { logger } from '../utils/logger.js';
 import { deactivateReferral } from '../db/partners.js';
 import { getUserByTelegramId } from '../db/users.js';
 import { escapeHtml } from '../utils/html.js';
+import { TEXTS } from '../texts/index.js';
 import { USDT, PARTNER } from '../config.js';
 import { refreshMenuKeyboard } from '../keyboards/index.js';
 
@@ -91,12 +92,11 @@ export async function runExpireJob(bot: Telegraf): Promise<void> {
     try {
       await bot.telegram.sendMessage(
         telegramId,
-        `\u{1F514} Твоя підписка закінчилась.\n\n` +
-        `Доступ до клубу призупинено. Оформи підписку, щоб повернутись!`,
+        TEXTS.SUBSCRIPTION_EXPIRED_NOTIFICATION,
         {
           reply_markup: {
             inline_keyboard: [
-              [{ text: '\u{1F4B3} Оформити підписку', callback_data: 'subscription' }],
+              [{ text: TEXTS.BTN_SUBSCRIBE, callback_data: 'subscription' }],
             ],
           },
         },

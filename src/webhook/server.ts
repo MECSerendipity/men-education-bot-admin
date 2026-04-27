@@ -8,7 +8,7 @@ import { logSubscriptionEvent } from '../db/subscription-events.js';
 import { getPricesForUser, daysFromPlanKey, switchPlanMethod } from '../services/pricing.js';
 import { deleteOffersForUser } from '../db/prices.js';
 import { sendRulesOrInvite } from '../handlers/rules.js';
-import { reloadTexts } from '../texts/index.js';
+import { reloadTexts, TEXTS } from '../texts/index.js';
 import { sendPaymentNotification, buildPaymentSuccessMessage, buildFirstPaymentDeclinedMessage } from '../services/notifications.js';
 import { getUserByTelegramId } from '../db/users.js';
 import { getPaymentMessage, deletePaymentMessage } from '../utils/payment-messages.js';
@@ -73,14 +73,12 @@ async function handleSuccessPage(req: IncomingMessage, res: ServerResponse): Pro
     isApproved = payment?.status === 'Approved';
   }
 
-  const title = isApproved ? '✅ Дякуємо за оплату!' : '⏳ Оплата обробляється';
-  const message = isApproved
-    ? 'Повернись у Telegram бот — підписка вже активна.'
-    : 'Можеш закрити цю сторінку та повернутись в бот — підтвердження прийде туди.';
+  const title = isApproved ? TEXTS.SUCCESS_PAGE_TITLE : TEXTS.PROCESSING_PAGE_TITLE;
+  const message = isApproved ? TEXTS.SUCCESS_PAGE_MESSAGE : TEXTS.PROCESSING_PAGE_MESSAGE;
 
   res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
   res.end(`<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Оплата</title>
+<html><head><meta charset="utf-8"><title>${TEXTS.PAYMENT_PAGE_HTML_TITLE}</title>
 <style>body{font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#f5f5f5;text-align:center;}</style>
 </head><body>
 <div>
@@ -239,18 +237,18 @@ async function handleCallback(req: IncomingMessage, res: ServerResponse, bot: Te
             expiresAt: activeSub.expires_at,
           });
           logger.info('Card changed successfully', { telegramId: payment.telegram_id, cardPan });
-          confirmText = `\u{2705} Картку змінено!\n\nНова картка: ${cardPan ?? 'збережено'}\nНаступне автоматичне продовження буде з нової картки.`;
+          confirmText = TEXTS.CARD_CHANGED_SUCCESS.replace('{cardPan}', cardPan ?? TEXTS.CARD_PAN_SAVED);
         } else {
           logger.warn('Card change: updateSubscriptionCard returned false', { orderReference });
-          confirmText = '\u{26A0}\u{FE0F} Не вдалося зберегти нову картку. Спробуй ще раз або зверніся в підтримку.';
+          confirmText = TEXTS.CARD_SAVE_ERROR;
         }
       } else {
         await updateTransactionCard(orderReference, recToken, cardPan);
         logger.warn('Card change approved but no recToken or no active subscription', { orderReference, hasRecToken: !!recToken, hasActiveSub: !!activeSub });
-        confirmText = '\u{26A0}\u{FE0F} Не вдалося зберегти нову картку. Спробуй ще раз або зверніся в підтримку.';
+        confirmText = TEXTS.CARD_SAVE_ERROR;
       }
 
-      const confirmKeyboard = { inline_keyboard: [[{ text: '\u{1F4CB} Моя підписка', callback_data: 'sub:back' }]] };
+      const confirmKeyboard = { inline_keyboard: [[{ text: TEXTS.BTN_MY_SUB_INLINE, callback_data: 'sub:back' }]] };
       await sendConfirmation(bot, payment.telegram_id, orderReference, confirmText, confirmKeyboard);
     } else if (transactionStatus === 'Approved' && payment.plan === 'method_change') {
       // Method change flow (crypto → card): update method + plan + save recToken
@@ -265,14 +263,14 @@ async function handleCallback(req: IncomingMessage, res: ServerResponse, bot: Te
         await linkTransactionToSubscription(payment.id, activeSub.id);
 
         logger.info('Payment method changed to card', { telegramId: payment.telegram_id, cardPan, newPlan });
-        confirmText = `\u{2705} Метод оплати змінено на картку!\n\nКартка: ${cardPan ?? 'збережено'}\nНаступне продовження буде автоматично з картки.`;
+        confirmText = TEXTS.METHOD_CHANGED_TO_CARD.replace('{cardPan}', cardPan ?? TEXTS.CARD_PAN_SAVED);
       } else {
         await updateTransactionCard(orderReference, recToken, cardPan);
         logger.warn('Method change approved but no recToken or no active subscription', { orderReference, hasRecToken: !!recToken, hasActiveSub: !!activeSub });
-        confirmText = '\u{26A0}\u{FE0F} Не вдалося змінити метод оплати. Спробуй ще раз або зверніся в підтримку.';
+        confirmText = TEXTS.METHOD_CHANGE_FAILED;
       }
 
-      const confirmKeyboard = { inline_keyboard: [[{ text: '\u{1F4CB} Моя підписка', callback_data: 'sub:back' }]] };
+      const confirmKeyboard = { inline_keyboard: [[{ text: TEXTS.BTN_MY_SUB_INLINE, callback_data: 'sub:back' }]] };
       await sendConfirmation(bot, payment.telegram_id, orderReference, confirmText, confirmKeyboard);
     } else if (transactionStatus === 'Approved') {
       const days = daysFromPlanKey(payment.plan);
@@ -348,14 +346,14 @@ async function handleCallback(req: IncomingMessage, res: ServerResponse, bot: Te
       if (payment.status === 'Cancelled') {
         logger.info('Declined callback for cancelled transaction, skipping notification', { orderReference });
       } else if (payment.plan === 'card_change') {
-        const reason = String(data.reason ?? 'Невідома помилка');
-        const declineText = `\u{274C} Не вдалося додати картку\n\nПричина: ${reason}\n\nСпробуй ще раз.`;
-        const keyboard = { inline_keyboard: [[{ text: '\u{1F4CB} Моя підписка', callback_data: 'sub:back' }]] };
+        const reason = String(data.reason ?? TEXTS.UNKNOWN_ERROR);
+        const declineText = TEXTS.CARD_ADD_FAILED.replace('{reason}', reason);
+        const keyboard = { inline_keyboard: [[{ text: TEXTS.BTN_MY_SUB_INLINE, callback_data: 'sub:back' }]] };
         await sendConfirmation(bot, payment.telegram_id, orderReference, declineText, keyboard);
       } else if (payment.plan === 'method_change') {
-        const reason = String(data.reason ?? 'Невідома помилка');
-        const declineText = `\u{274C} Не вдалося змінити метод оплати\n\nПричина: ${reason}\n\nСпробуй ще раз.`;
-        const keyboard = { inline_keyboard: [[{ text: '\u{1F4CB} Моя підписка', callback_data: 'sub:back' }]] };
+        const reason = String(data.reason ?? TEXTS.UNKNOWN_ERROR);
+        const declineText = TEXTS.METHOD_CHANGE_DECLINED.replace('{reason}', reason);
+        const keyboard = { inline_keyboard: [[{ text: TEXTS.BTN_MY_SUB_INLINE, callback_data: 'sub:back' }]] };
         await sendConfirmation(bot, payment.telegram_id, orderReference, declineText, keyboard);
       } else {
         try {
@@ -370,7 +368,7 @@ async function handleCallback(req: IncomingMessage, res: ServerResponse, bot: Te
             {
               reply_markup: {
                 inline_keyboard: [
-                  [{ text: '\u{1F504} Спробувати ще раз', callback_data: 'subscription' }],
+                  [{ text: TEXTS.BTN_RETRY, callback_data: 'subscription' }],
                 ],
               },
             },
@@ -400,7 +398,7 @@ async function handleCallback(req: IncomingMessage, res: ServerResponse, bot: Te
 
 /** Start the webhook HTTP server */
 export function startWebhookServer(bot: Telegraf): void {
-  const port = Number(process.env.WEBHOOK_PORT ?? 3001);
+  const port = Number(process.env.WAYFORPAY_WEBHOOK_PORT ?? 3002);
 
   const server = createServer(async (req, res) => {
     try {

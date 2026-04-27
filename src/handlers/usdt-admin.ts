@@ -8,6 +8,7 @@ import { SUPPORT_URL } from '../config.js';
 import { sendRulesOrInvite } from './rules.js';
 import { getUserByTelegramId } from '../db/users.js';
 import { planDisplayName, buildPaymentSuccessMessage } from '../services/notifications.js';
+import { TEXTS } from '../texts/index.js';
 import { escapeHtml } from '../utils/html.js';
 import { refreshMenuKeyboard } from '../keyboards/index.js';
 import { processPartnerCommission } from '../services/partner.js';
@@ -32,7 +33,7 @@ async function handleAdminDecision(
 ): Promise<void> {
   const payment = await getTransactionByOrderReference(orderReference);
   if (!payment) {
-    await ctx.answerCbQuery('Платіж не знайдено');
+    await ctx.answerCbQuery(TEXTS.PAYMENT_NOT_FOUND);
     return;
   }
 
@@ -40,7 +41,7 @@ async function handleAdminDecision(
   const newStatus = approved ? 'Approved' : 'Declined';
   const claimed = await claimTransaction(orderReference, 'WaitingConfirmation', newStatus);
   if (!claimed) {
-    await ctx.answerCbQuery('Цей платіж вже оброблено');
+    await ctx.answerCbQuery(TEXTS.PAYMENT_ALREADY_PROCESSED);
     return;
   }
 
@@ -48,7 +49,7 @@ async function handleAdminDecision(
 
   const adminUsername = ctx.from?.username ? `@${ctx.from.username}` : 'Admin';
   const user = await getUserByTelegramId(payment.telegram_id);
-  const username = user?.username ? `@${escapeHtml(user.username)}` : 'немає';
+  const username = user?.username ? `@${escapeHtml(user.username)}` : TEXTS.USERNAME_NONE;
   const isFirst = await isFirstApprovedTransaction(payment.telegram_id, orderReference);
   const tag = isFirst ? '#first_subscription' : '#renew';
   const hashDisplay = payment.tx_hash ? `<code>${escapeHtml(payment.tx_hash)}</code>` : 'N/A';
@@ -117,12 +118,11 @@ async function handleAdminDecision(
     try {
       await bot.telegram.sendMessage(
         payment.telegram_id,
-        'На жаль, ми не можемо підтвердити твій хеш — зверніся у підтримку\n' +
-        'Статус: Не підтверджено ❌',
+        TEXTS.CRYPTO_PAYMENT_DENIED,
         {
           reply_markup: {
             inline_keyboard: [
-              [{ text: 'Підтримка 😊', url: SUPPORT_URL }],
+              [{ text: TEXTS.BTN_SUPPORT_CONTACT, url: SUPPORT_URL }],
             ],
           },
         },
