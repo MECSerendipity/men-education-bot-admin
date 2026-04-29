@@ -8,6 +8,7 @@ import { getUserByTelegramId } from '../db/users.js';
 import { escapeHtml } from '../utils/html.js';
 import { TEXTS } from '../texts/index.js';
 import { USDT, PARTNER } from '../config.js';
+import { notifyJobResult } from '../services/job-monitor.js';
 import { refreshMenuKeyboard } from '../keyboards/index.js';
 
 /**
@@ -69,7 +70,10 @@ export async function runExpireJob(bot: Telegraf): Promise<void> {
 
   const allUsersToKick = [...new Set([...expiredUsers, ...cancelledUsers])];
 
-  if (allUsersToKick.length === 0) return;
+  if (allUsersToKick.length === 0) {
+    await notifyJobResult(bot, { jobName: 'Expire Subscriptions', found: 0, success: 0, failed: 0 });
+    return;
+  }
 
   logger.info(`Expire job: processing ${expiredUsers.length} expired + ${cancelledUsers.length} cancelled subscription(s)`);
 
@@ -142,4 +146,12 @@ export async function runExpireJob(bot: Telegraf): Promise<void> {
       logger.error('Expire job: failed to send churn notification', err);
     }
   }
+
+  await notifyJobResult(bot, {
+    jobName: 'Expire Subscriptions',
+    found: allUsersToKick.length,
+    success: allUsersToKick.length,
+    failed: 0,
+    details: `Expired: ${expiredUsers.length}, Cancelled: ${cancelledUsers.length}`,
+  });
 }

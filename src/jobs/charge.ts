@@ -8,6 +8,7 @@ import { sendPaymentNotification, buildPaymentSuccessMessage, buildChargeFailedM
 import { getUserByTelegramId } from '../db/users.js';
 import { TEXTS } from '../texts/index.js';
 import { processPartnerCommission } from '../services/partner.js';
+import { notifyJobResult } from '../services/job-monitor.js';
 
 interface PlanPrice {
   key: string;
@@ -55,9 +56,15 @@ function getPlanPrice(sub: Subscription): PlanPrice | null {
 export async function runCardChargeJob(bot: Telegraf): Promise<void> {
   const subs = await getCardSubscriptionsDueForRenewal();
 
-  if (subs.length === 0) return;
+  if (subs.length === 0) {
+    await notifyJobResult(bot, { jobName: 'Auto-Renewal (Card)', found: 0, success: 0, failed: 0 });
+    return;
+  }
 
   logger.info(`Charge job: found ${subs.length} card subscription(s) due for renewal`);
+
+  let successCount = 0;
+  let failedCount = 0;
 
   for (const sub of subs) {
     const planPrice = getPlanPrice(sub);
@@ -122,6 +129,7 @@ export async function runCardChargeJob(bot: Telegraf): Promise<void> {
         recToken: sub.rec_token,
       });
 
+      successCount++;
       logger.info('Charge job: success', { telegramId: sub.telegram_id, orderRef });
 
       try {
@@ -163,6 +171,7 @@ export async function runCardChargeJob(bot: Telegraf): Promise<void> {
       await updateTransactionStatus(orderRef, 'Declined');
       await updateTransactionDeclineReason(orderRef, result.reason ?? null, result.reasonCode ?? null);
 
+      failedCount++;
       logger.warn('Charge job: charge failed', {
         telegramId: sub.telegram_id,
         orderRef,
@@ -198,20 +207,34 @@ export async function runCardChargeJob(bot: Telegraf): Promise<void> {
       }
     }
   }
+
+  await notifyJobResult(bot, {
+    jobName: 'Auto-Renewal (Card)',
+    found: subs.length,
+    success: successCount,
+    failed: failedCount,
+  });
 }
 
 /** Send renewal reminders to crypto subscriptions that are due */
 export async function runCryptoReminderJob(bot: Telegraf): Promise<void> {
   const subs = await getCryptoSubscriptionsDueForRenewal();
 
-  if (subs.length === 0) return;
+  if (subs.length === 0) {
+    await notifyJobResult(bot, { jobName: 'Crypto Reminder', found: 0, success: 0, failed: 0 });
+    return;
+  }
 
   logger.info(`Charge job: found ${subs.length} crypto subscription(s) due for renewal`);
+
+  let sentCount = 0;
+  let failCount = 0;
 
   for (const sub of subs) {
     const planPrice = getPlanPrice(sub);
     if (!planPrice) {
       logger.warn('Charge job: no price found for crypto plan', { telegramId: sub.telegram_id, plan: sub.plan });
+      failCount++;
       continue;
     }
 
@@ -227,7 +250,6 @@ export async function runCryptoReminderJob(bot: Telegraf): Promise<void> {
     });
 
     try {
-      // TODO: replace with full crypto payment flow (hash submission + admin approval)
       await bot.telegram.sendMessage(
         sub.telegram_id,
         `\u{1F514} Нагадування про продовження підписки\n\n` +
@@ -243,8 +265,17 @@ export async function runCryptoReminderJob(bot: Telegraf): Promise<void> {
           },
         },
       );
+      sentCount++;
     } catch (err) {
+      failCount++;
       logger.error('Charge job: failed to send crypto reminder', err);
     }
   }
+
+  await notifyJobResult(bot, {
+    jobName: 'Crypto Reminder',
+    found: subs.length,
+    success: sentCount,
+    failed: failCount,
+  });
 }

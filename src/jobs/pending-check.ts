@@ -12,6 +12,7 @@ import { getUserByTelegramId } from '../db/users.js';
 import { refreshMenuKeyboard } from '../keyboards/index.js';
 import { processPartnerCommission } from '../services/partner.js';
 import { TEXTS } from '../texts/index.js';
+import { notifyJobResult } from '../services/job-monitor.js';
 
 /**
  * Check stale Pending card transactions via WayForPay CHECK_STATUS API.
@@ -21,9 +22,18 @@ import { TEXTS } from '../texts/index.js';
  */
 export async function runPendingCheckJob(bot: Telegraf): Promise<void> {
   const pending = await getStalePendingCardTransactions();
-  if (pending.length === 0) return;
+  if (pending.length === 0) {
+    await notifyJobResult(bot, { jobName: 'Pending Transactions Check', found: 0, success: 0, failed: 0 });
+    return;
+  }
 
   logger.info(`Pending check: found ${pending.length} stale transaction(s)`);
+
+  let approvedCount = 0;
+  let declinedCount = 0;
+  let cancelledCount = 0;
+  let processingCount = 0;
+  let errorCount = 0;
 
   for (const tx of pending) {
     try {
@@ -37,7 +47,6 @@ export async function runPendingCheckJob(bot: Telegraf): Promise<void> {
       });
 
       if (transactionStatus === 'Approved') {
-        // Atomically claim to prevent race with a late callback
         const claimed = await claimTransaction(tx.order_reference, tx.status, 'Approved');
         if (!claimed) {
           logger.info('Pending check: already claimed, skipping', { orderReference: tx.order_reference });
@@ -45,27 +54,39 @@ export async function runPendingCheckJob(bot: Telegraf): Promise<void> {
         }
 
         await processApproved(bot, tx, recToken, cardPan);
+        approvedCount++;
       } else if (transactionStatus === 'Declined' || transactionStatus === 'Refunded') {
         const claimed = await claimTransaction(tx.order_reference, tx.status, 'Declined');
         if (!claimed) continue;
 
         await updateTransactionDeclineReason(tx.order_reference, result.reason, result.reasonCode);
         await processDeclined(bot, tx);
+        declinedCount++;
       } else if (transactionStatus === 'InProcessing' || transactionStatus === 'WaitingAuthComplete') {
-        // Still processing — skip, will check again next run
         logger.info('Pending check: still processing, will retry', { orderReference: tx.order_reference });
+        processingCount++;
       } else {
-        // Expired, not found, or unknown — cancel
         await updateTransactionStatus(tx.order_reference, 'Cancelled');
         logger.info('Pending check: cancelled stale transaction', {
           orderReference: tx.order_reference,
           wayforpayStatus: transactionStatus || 'empty',
         });
+        cancelledCount++;
       }
     } catch (err) {
+      errorCount++;
       logger.error('Pending check: failed to process transaction', { orderReference: tx.order_reference, err });
     }
   }
+
+  await notifyJobResult(bot, {
+    jobName: 'Pending Transactions Check',
+    found: pending.length,
+    success: approvedCount + declinedCount + cancelledCount,
+    failed: errorCount,
+    details: `Approved: ${approvedCount}, Declined: ${declinedCount}, Cancelled: ${cancelledCount}` +
+      (processingCount > 0 ? `, InProcessing: ${processingCount}` : ''),
+  });
 }
 
 async function processApproved(bot: Telegraf, tx: { id: number; telegram_id: number; plan: string; amount: number; currency: string; order_reference: string; status: string }, recToken: string | null, cardPan: string | null): Promise<void> {

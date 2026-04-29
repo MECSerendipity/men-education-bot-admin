@@ -27,6 +27,12 @@ export const ADMIN_IDS: number[] = (process.env.ADMIN_TELEGRAM_IDS ?? '')
   .map((id) => Number(id.trim()))
   .filter((id) => id > 0);
 
+/** Job monitor — admin channel thread for job execution notifications */
+export const JOB_MONITOR = {
+  channelId: process.env.ME_ADMIN_CHANNEL_ID ?? '',
+  threadId: process.env.ME_ADMIN_JOB_MONITOR_THREAD_ID ?? '',
+} as const;
+
 /** Partner system admin notification config */
 export const PARTNER = {
   withdrawalThreadId: process.env.ME_ADMIN_PARTNER_WITHDRAWAL_THREAD_ID ?? '7',

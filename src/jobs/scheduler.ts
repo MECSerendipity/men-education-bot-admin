@@ -5,96 +5,51 @@ import { logger } from '../utils/logger.js';
 import { runCleanupJob } from './cleanup.js';
 import { runPendingCheckJob } from './pending-check.js';
 
-// TODO: TESTING MODE — remove before production
-import { runTestCardCharge } from './card-charge-test.js';
-import { runTestExpireJob } from './expire-test.js';
+/**
+ * TESTING MODE: all jobs run every minute for testing.
+ * Before production: change intervals back to scheduled hours.
+ *
+ * Production schedule:
+ *   expire        — 07:00 UTC (10:00 Kyiv)
+ *   charge        — 09:00, 15:00 UTC (12:00, 18:00 Kyiv)
+ *   crypto-remind — 09:00, 15:00 UTC (12:00, 18:00 Kyiv)
+ *   cleanup       — 03:00 UTC (06:00 Kyiv)
+ *   pending-check — every 5 minutes
+ */
 
-/** Job schedule definition */
-interface ScheduledJob {
-  name: string;
-  utcHour: number;
-  run: (bot: Telegraf) => Promise<void>;
-}
-
-/** All scheduled jobs — times in UTC */
-const JOBS: ScheduledJob[] = [
-  { name: 'expire',         utcHour: 7,  run: runExpireJob },
-  { name: 'charge-1',       utcHour: 9,  run: async (bot) => { await runCardChargeJob(bot); } },
-  { name: 'charge-2',       utcHour: 15, run: async (bot) => { await runCardChargeJob(bot); } },
-  { name: 'crypto-remind-1', utcHour: 9,  run: async (bot) => { await runCryptoReminderJob(bot); } },
-  { name: 'crypto-remind-2', utcHour: 15, run: async (bot) => { await runCryptoReminderJob(bot); } },
-  { name: 'cleanup',        utcHour: 3,  run: async () => { await runCleanupJob(); } },
-];
-
-/** Track which jobs already ran today (reset at midnight UTC) */
-const executedToday = new Set<string>();
-let lastResetDate = '';
-
-function resetIfNewDay(): void {
-  const today = new Date().toISOString().slice(0, 10);
-  if (today !== lastResetDate) {
-    executedToday.clear();
-    lastResetDate = today;
-  }
-}
-
-/** Check and run jobs that are due. Called every minute. */
-async function tick(bot: Telegraf): Promise<void> {
-  resetIfNewDay();
-
-  const now = new Date();
-  const currentHour = now.getUTCHours();
-
-  for (const job of JOBS) {
-    const jobKey = `${job.name}:${lastResetDate}`;
-
-    if (currentHour >= job.utcHour && !executedToday.has(jobKey)) {
-      executedToday.add(jobKey);
-      logger.info(`Scheduler: running job "${job.name}" (UTC ${job.utcHour}:00)`);
-
-      try {
-        await job.run(bot);
-        logger.info(`Scheduler: job "${job.name}" completed`);
-      } catch (err) {
-        logger.error(`Scheduler: job "${job.name}" failed`, err);
-      }
-    }
-  }
-}
-
-/** Start the job scheduler — checks every minute */
+/** Start the job scheduler */
 export function startScheduler(bot: Telegraf): void {
-  logger.info('Scheduler started', {
-    jobs: JOBS.map((j) => `${j.name} @ UTC ${j.utcHour}:00`),
-  });
+  logger.info('Scheduler started (TESTING MODE — all jobs every 1 min)');
 
-  const interval = setInterval(() => {
-    tick(bot).catch((err) => logger.error('Scheduler tick failed', err));
-  }, 60 * 1000);
-  interval.unref();
+  // Card charge — every 1 min (prod: 09:00 + 15:00 UTC)
+  setInterval(() => {
+    runCardChargeJob(bot).catch((err) => logger.error('Card charge job failed', err));
+  }, 60 * 1000).unref();
 
-  // Pending card transactions check — every 5 minutes
-  const pendingCheckInterval = setInterval(() => {
-    runPendingCheckJob(bot).catch((err) => logger.error('Pending check tick failed', err));
-  }, 5 * 60 * 1000);
-  pendingCheckInterval.unref();
+  // Crypto reminder — every 1 min (prod: 09:00 + 15:00 UTC)
+  setInterval(() => {
+    runCryptoReminderJob(bot).catch((err) => logger.error('Crypto reminder job failed', err));
+  }, 60 * 1000).unref();
 
-  // Run pending check on startup
-  runPendingCheckJob(bot).catch((err) => logger.error('Pending check initial tick failed', err));
+  // Expire — every 1 min (prod: 07:00 UTC)
+  setInterval(() => {
+    runExpireJob(bot).catch((err) => logger.error('Expire job failed', err));
+  }, 60 * 1000).unref();
 
-  // TODO: TESTING MODE — card charge + expire every minute. Remove before production.
-  const testCardChargeInterval = setInterval(() => {
-    runTestCardCharge(bot).catch((err) => logger.error('Test card charge tick failed', err));
-  }, 60 * 1000);
-  testCardChargeInterval.unref();
+  // Pending transactions check — every 5 min (same in prod)
+  setInterval(() => {
+    runPendingCheckJob(bot).catch((err) => logger.error('Pending check job failed', err));
+  }, 5 * 60 * 1000).unref();
 
-  const testExpireInterval = setInterval(() => {
-    runTestExpireJob(bot).catch((err) => logger.error('Test expire tick failed', err));
-  }, 30 * 1000);
-  testExpireInterval.unref();
+  // Cleanup — every 1 min (prod: 03:00 UTC)
+  setInterval(() => {
+    runCleanupJob().catch((err) => logger.error('Cleanup job failed', err));
+  }, 60 * 1000).unref();
 
-  // Run immediately on startup to catch any missed jobs
-  tick(bot).catch((err) => logger.error('Scheduler initial tick failed', err));
-  runTestCardCharge(bot).catch((err) => logger.error('Test card charge initial tick failed', err));
-  runTestExpireJob(bot).catch((err) => logger.error('Test expire initial tick failed', err));
+  // Run all immediately on startup
+  runCardChargeJob(bot).catch((err) => logger.error('Card charge initial run failed', err));
+  runCryptoReminderJob(bot).catch((err) => logger.error('Crypto reminder initial run failed', err));
+  runExpireJob(bot).catch((err) => logger.error('Expire initial run failed', err));
+  runPendingCheckJob(bot).catch((err) => logger.error('Pending check initial run failed', err));
+  runCleanupJob().catch((err) => logger.error('Cleanup initial run failed', err));
 }
