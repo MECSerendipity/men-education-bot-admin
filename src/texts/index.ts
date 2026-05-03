@@ -208,7 +208,8 @@ export type TextKey =
   | 'UNKNOWN_ERROR'
   | 'PAYMENT_INVOICE_TEMPLATE'
   | 'USDT_HASH_INSTRUCTION_URL'
-  | 'USDT_TOP_UP_INSTRUCTION_URL';
+  | 'USDT_TOP_UP_INSTRUCTION_URL'
+;
 
 /**
  * Path to texts.json — resolved from project root (process.cwd()),

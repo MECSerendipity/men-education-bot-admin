@@ -17,6 +17,7 @@ import { createTransaction, hasPendingCardTransaction, updateTransactionStatus }
 import { switchPlanMethod, planDuration } from '../services/pricing.js';
 import { savePaymentMessage, deletePaymentMessage } from '../utils/payment-messages.js';
 import { generateOrderReference } from '../utils/order-reference.js';
+import { refreshMenuKeyboard } from '../keyboards/index.js';
 
 /** Extract subscription display info */
 function subInfo(sub: Subscription) {
@@ -87,6 +88,22 @@ function cancelConfirmKeyboard() {
   };
 }
 
+/** Show fallback when subscription is not active (cancelled or no subscription) */
+async function showInactiveFallback(ctx: { from: { id: number }; editMessageText: Function }, telegramId: number): Promise<void> {
+  const cancelledSub = await getCancelledSubscription(telegramId);
+  if (cancelledSub) {
+    await ctx.editMessageText(buildCancelledText(cancelledSub), { reply_markup: cancelledKeyboard() });
+  } else {
+    await ctx.editMessageText(TEXTS.NO_SUBSCRIPTION, {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: TEXTS.BTN_SUBSCRIBE, callback_data: 'subscription' }],
+        ],
+      },
+    });
+  }
+}
+
 /** Register "Моя підписка" button handler */
 export function registerMySubscriptionHandler(bot: Telegraf) {
   bot.hears(TEXTS.BTN_MY_SUBSCRIPTION, async (ctx) => {
@@ -115,7 +132,7 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
   bot.action('sub:manage', async (ctx) => {
     await ctx.answerCbQuery();
     const activeSub = await getActiveSubscription(ctx.from!.id);
-    if (!activeSub) return;
+    if (!activeSub) { await showInactiveFallback(ctx, ctx.from!.id); return; }
 
     await ctx.editMessageText(buildActiveText(activeSub), { reply_markup: manageKeyboard() });
   });
@@ -126,7 +143,7 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
     const telegramId = ctx.from!.id;
 
     const activeSub = await getActiveSubscription(telegramId);
-    if (!activeSub) return;
+    if (!activeSub) { await showInactiveFallback(ctx, ctx.from!.id); return; }
 
     const linkButtons = await getInviteButtons(bot, telegramId);
 
@@ -144,7 +161,7 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
     const telegramId = ctx.from!.id;
 
     const activeSub = await getActiveSubscription(telegramId);
-    if (!activeSub) return;
+    if (!activeSub) { await showInactiveFallback(ctx, ctx.from!.id); return; }
 
     const currentMethod = activeSub.method === 'card' ? TEXTS.METHOD_LABEL_CARD : TEXTS.METHOD_LABEL_USDT;
     const targetMethod = activeSub.method === 'card' ? TEXTS.METHOD_LABEL_USDT : TEXTS.METHOD_LABEL_CARD;
@@ -185,7 +202,7 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
     const telegramId = ctx.from!.id;
 
     const activeSub = await getActiveSubscription(telegramId);
-    if (!activeSub) return;
+    if (!activeSub) { await showInactiveFallback(ctx, ctx.from!.id); return; }
 
     const newPlan = switchPlanMethod(activeSub.plan, 'crypto');
     const sub = await changePaymentMethod(telegramId, 'crypto', newPlan);
@@ -213,6 +230,9 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
   bot.action('sub:switch_to_card', async (ctx) => {
     await ctx.answerCbQuery();
     const telegramId = ctx.from!.id;
+
+    const activeSub = await getActiveSubscription(telegramId);
+    if (!activeSub) { await showInactiveFallback(ctx, telegramId); return; }
 
     if (await hasPendingCardTransaction(telegramId)) {
       await ctx.editMessageText(
@@ -314,7 +334,7 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
     const telegramId = ctx.from!.id;
 
     const activeSub = await getActiveSubscription(telegramId);
-    if (!activeSub) return;
+    if (!activeSub) { await showInactiveFallback(ctx, ctx.from!.id); return; }
 
     // Which duration to display — default to current
     const currentDuration = planDuration(activeSub.plan);
@@ -384,7 +404,7 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
     const newDuration = ctx.match[1];
 
     const activeSub = await getActiveSubscription(telegramId);
-    if (!activeSub) return;
+    if (!activeSub) { await showInactiveFallback(ctx, ctx.from!.id); return; }
 
     const newPlan = `${activeSub.method}_${newDuration}`;
 
@@ -432,7 +452,7 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
     const telegramId = ctx.from!.id;
 
     const activeSub = await getActiveSubscription(telegramId);
-    if (!activeSub) return;
+    if (!activeSub) { await showInactiveFallback(ctx, ctx.from!.id); return; }
 
     if (activeSub.method === 'crypto') {
       await ctx.editMessageText(
@@ -467,6 +487,9 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
   bot.action('sub:new_card', async (ctx) => {
     await ctx.answerCbQuery();
     const telegramId = ctx.from!.id;
+
+    const activeSub = await getActiveSubscription(telegramId);
+    if (!activeSub) { await showInactiveFallback(ctx, telegramId); return; }
 
     if (await hasPendingCardTransaction(telegramId)) {
       await ctx.editMessageText(
@@ -565,6 +588,8 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
   // Cancel subscription — show confirmation
   bot.action('sub:cancel', async (ctx) => {
     await ctx.answerCbQuery();
+    const activeSub = await getActiveSubscription(ctx.from!.id);
+    if (!activeSub) { await showInactiveFallback(ctx, ctx.from!.id); return; }
     await ctx.editMessageText(
       TEXTS.CANCEL_SUBSCRIPTION_CONFIRM,
       { reply_markup: cancelConfirmKeyboard() },
@@ -574,6 +599,8 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
   // Cancel subscription — confirmed
   bot.action('sub:cancel_confirm', async (ctx) => {
     await ctx.answerCbQuery();
+    const activeSub = await getActiveSubscription(ctx.from!.id);
+    if (!activeSub) { await showInactiveFallback(ctx, ctx.from!.id); return; }
     const sub = await cancelSubscription(ctx.from!.id);
     if (!sub) {
       await ctx.editMessageText(TEXTS.SUBSCRIPTION_NOT_FOUND_OR_CANCELLED);
@@ -583,14 +610,6 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
     logger.info('Subscription cancelled by user', { telegramId: ctx.from!.id, subscriptionId: sub.id });
 
     await ctx.editMessageText(buildCancelledText(sub), { reply_markup: cancelledKeyboard() });
-
-    // Send a separate notification message so the user sees it even if they closed the chat
-    const expiresDate = formatDate(sub.expires_at);
-    try {
-      await ctx.reply(
-        TEXTS.SUB_CANCELLED_NOTIFICATION.replace('{expiresDate}', expiresDate),
-      );
-    } catch { /* ignore if reply fails */ }
   });
 
   // Reactivate cancelled subscription
@@ -614,6 +633,8 @@ export function registerMySubscriptionHandler(bot: Telegraf) {
         },
       },
     );
+
+    await refreshMenuKeyboard(bot, ctx.from!.id, true);
   });
 
   // Back to subscription info

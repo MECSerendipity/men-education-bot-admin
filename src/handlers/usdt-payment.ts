@@ -381,12 +381,16 @@ export function registerUsdtPaymentHandler(bot: Telegraf) {
       const isFirst = await isFirstApprovedTransaction(telegramId, state.orderReference);
       const tag = isFirst ? '#first_subscription' : '#renew';
       const threadId = Number(USDT.adminThreadId) || undefined;
+      const { getActiveSubscription } = await import('../db/subscriptions.js');
+      const activeSub = await getActiveSubscription(telegramId);
+      const subIdLine = activeSub ? `▸ Subscription ID: <code>${activeSub.id}</code>\n` : '';
       await bot.telegram.sendMessage(
         adminChannelId,
         `<b>ME USDT - перевірка</b>\n` +
         `Оплата в USDT потребує підтвердження 👇\n\n` +
         `▸ User ID: <code>${user?.id ?? 'N/A'}</code>\n` +
         `▸ Username: ${username}\n` +
+        subIdLine +
         `▸ Transaction ID: <code>${tx.id}</code>\n` +
         `▸ Plan: ${planDisplayName(state.planKey)}\n` +
         `▸ Amount: ${state.plan.amount} ${escapeHtml(state.plan.currency)}\n` +

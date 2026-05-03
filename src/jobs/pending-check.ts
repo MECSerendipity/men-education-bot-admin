@@ -104,11 +104,11 @@ async function processApproved(bot: Telegraf, tx: { id: number; telegram_id: num
     }
   } else if (tx.plan === 'method_change') {
     const activeSub = await getActiveSubscription(tx.telegram_id);
-    if (recToken && activeSub) {
-      await updateTransactionCard(tx.order_reference, recToken, cardPan);
+    if (activeSub) {
+      if (recToken) await updateTransactionCard(tx.order_reference, recToken, cardPan);
       const newPlan = switchPlanMethod(activeSub.plan, 'card');
       await changePaymentMethod(tx.telegram_id, 'card', newPlan, cardPan);
-      await updateSubscriptionCard(tx.telegram_id, recToken, cardPan);
+      if (recToken) await updateSubscriptionCard(tx.telegram_id, recToken, cardPan);
       await linkTransactionToSubscription(tx.id, activeSub.id);
       await bot.telegram.sendMessage(tx.telegram_id, TEXTS.METHOD_CHANGED_TO_CARD.replace('{cardPan}', cardPan ?? TEXTS.CARD_PAN_SAVED)).catch(() => {});
     }
@@ -117,12 +117,12 @@ async function processApproved(bot: Telegraf, tx: { id: number; telegram_id: num
     const days = daysFromPlanKey(tx.plan);
     const isRenewal = await hasActiveSubscription(tx.telegram_id);
 
-    await updateTransactionCard(tx.order_reference, recToken, cardPan);
+    if (recToken) await updateTransactionCard(tx.order_reference, recToken, cardPan);
 
     const prices = await getPricesForUser(tx.telegram_id);
     const subscription = await activateSubscription({
       telegramId: tx.telegram_id, plan: tx.plan, method: 'card', days,
-      transactionId: tx.id, prices, cardPan, recToken,
+      transactionId: tx.id, prices, cardPan: cardPan ?? undefined, recToken: recToken ?? undefined,
     });
 
     await deleteOffersForUser(tx.telegram_id);

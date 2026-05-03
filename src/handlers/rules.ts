@@ -4,6 +4,7 @@ import { buildMainMenuKeyboard } from '../keyboards/index.js';
 import { TEXTS } from '../texts/index.js';
 import { logger } from '../utils/logger.js';
 import { generateAndSendInvites } from '../services/invite.js';
+import { refreshMenuKeyboard } from '../keyboards/index.js';
 
 
 /** Reply keyboard with only the accept rules button */
@@ -23,6 +24,7 @@ export async function sendRulesOrInvite(bot: Telegraf, telegramId: number): Prom
 
   if (alreadyAccepted) {
     await sendInviteLink(bot, telegramId);
+    await refreshMenuKeyboard(bot, telegramId, true);
   } else {
     try {
       await bot.telegram.sendMessage(telegramId, TEXTS.RULES_TEXT, {

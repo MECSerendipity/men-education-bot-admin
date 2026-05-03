@@ -79,7 +79,9 @@ const EVENT_LABELS: Record<string, string> = {
   method_changed: 'Method Changed',
   card_changed: 'Card Changed',
   cancelled: 'Cancelled',
+  reactivated: 'Reactivated',
   expired: 'Expired',
+  migrated: 'Migrated',
 };
 
 
@@ -328,7 +330,7 @@ export function SubscriptionsPage() {
                                           <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
                                             EVENT_STYLES[ev.event] ?? 'bg-gray-100 text-gray-500'
                                           }`}>
-                                            {EVENT_LABELS[ev.event] ?? ev.event}
+                                            {EVENT_LABELS[ev.event] ?? (ev.event.charAt(0).toUpperCase() + ev.event.slice(1))}
                                           </span>
                                         </td>
                                         <td className="py-2 pr-4 text-xs">{ev.plan ?? '-'}</td>

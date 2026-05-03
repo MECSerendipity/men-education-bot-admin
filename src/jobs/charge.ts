@@ -216,8 +216,10 @@ export async function runCardChargeJob(bot: Telegraf): Promise<void> {
   });
 }
 
-/** Send renewal reminders to crypto subscriptions that are due */
+/** Send crypto payment flow to users with expiring crypto subscriptions */
 export async function runCryptoReminderJob(bot: Telegraf): Promise<void> {
+  const { sendCryptoPaymentReminder } = await import('../handlers/usdt-payment.js');
+
   const subs = await getCryptoSubscriptionsDueForRenewal();
 
   if (subs.length === 0) {
@@ -231,44 +233,17 @@ export async function runCryptoReminderJob(bot: Telegraf): Promise<void> {
   let failCount = 0;
 
   for (const sub of subs) {
-    const planPrice = getPlanPrice(sub);
-    if (!planPrice) {
-      logger.warn('Charge job: no price found for crypto plan', { telegramId: sub.telegram_id, plan: sub.plan });
-      failCount++;
-      continue;
-    }
-
-    const daysLeft = Math.max(0, Math.ceil((sub.expires_at.getTime() - Date.now()) / (1000 * 60 * 60 * 24)));
-    const urgency = daysLeft === 0
-      ? 'Сьогодні останній день підписки!'
-      : `До кінця підписки: ${daysLeft} дн.`;
-
-    logger.info('Charge job: sending crypto reminder', {
+    logger.info('Charge job: sending crypto payment flow', {
       telegramId: sub.telegram_id,
       plan: sub.plan,
-      daysLeft,
     });
 
     try {
-      await bot.telegram.sendMessage(
-        sub.telegram_id,
-        `\u{1F514} Нагадування про продовження підписки\n\n` +
-        `\u{1F4E6} ${planPrice.display_name ?? sub.plan}\n` +
-        `\u{1F4B0} ${planPrice.amount} ${planPrice.currency}\n` +
-        `${urgency}\n\n` +
-        `Оплатіть, щоб зберегти доступ до клубу.`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: TEXTS.BTN_PAY_USDT_INLINE, callback_data: 'subscription' }],
-            ],
-          },
-        },
-      );
+      await sendCryptoPaymentReminder(bot, sub.telegram_id, sub.plan);
       sentCount++;
     } catch (err) {
       failCount++;
-      logger.error('Charge job: failed to send crypto reminder', err);
+      logger.error('Charge job: failed to send crypto payment flow', err);
     }
   }
 

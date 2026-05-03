@@ -17,39 +17,41 @@ export interface Subscription {
   updated_at: Date;
 }
 
-/** Check if user has an active subscription */
+/** Check if user has an active subscription (date-level: access for the full expiry day) */
 export async function hasActiveSubscription(telegramId: number): Promise<boolean> {
   const result = await db.query(
     `SELECT 1 FROM subscriptions
      WHERE telegram_id = $1
        AND status = 'Active'
-       AND expires_at > NOW()
+       AND expires_at::date >= CURRENT_DATE
      LIMIT 1`,
     [telegramId],
   );
   return result.rows.length > 0;
 }
 
-/** Get active subscription for user */
+/** Get active subscription for user (date-level: access for the full expiry day) */
 export async function getActiveSubscription(telegramId: number): Promise<Subscription | null> {
   const result = await db.query(
     `SELECT * FROM subscriptions
      WHERE telegram_id = $1
        AND status = 'Active'
-       AND expires_at > NOW()
+       AND expires_at::date >= CURRENT_DATE
+     ORDER BY expires_at DESC
      LIMIT 1`,
     [telegramId],
   );
   return result.rows[0] ?? null;
 }
 
-/** Get cancelled subscription that hasn't expired yet */
+/** Get cancelled subscription that hasn't expired yet (date-level: access for the full expiry day) */
 export async function getCancelledSubscription(telegramId: number): Promise<Subscription | null> {
   const result = await db.query(
     `SELECT * FROM subscriptions
      WHERE telegram_id = $1
        AND status = 'Cancelled'
-       AND expires_at > NOW()
+       AND expires_at::date >= CURRENT_DATE
+     ORDER BY expires_at DESC
      LIMIT 1`,
     [telegramId],
   );
@@ -64,7 +66,7 @@ export async function cancelSubscription(telegramId: number): Promise<Subscripti
 
     const result = await client.query(
       `UPDATE subscriptions SET status = 'Cancelled', updated_at = NOW()
-       WHERE telegram_id = $1 AND status = 'Active' AND expires_at > NOW()
+       WHERE telegram_id = $1 AND status = 'Active' AND expires_at::date >= CURRENT_DATE
        RETURNING *`,
       [telegramId],
     );
@@ -96,7 +98,7 @@ export async function reactivateSubscription(telegramId: number): Promise<Subscr
 
     const result = await client.query(
       `UPDATE subscriptions SET status = 'Active', updated_at = NOW()
-       WHERE telegram_id = $1 AND status = 'Cancelled' AND expires_at > NOW()
+       WHERE telegram_id = $1 AND status = 'Cancelled' AND expires_at::date >= CURRENT_DATE
        RETURNING *`,
       [telegramId],
     );
@@ -133,7 +135,7 @@ export async function changePaymentMethod(telegramId: number, newMethod: string,
            rec_token = CASE WHEN $4 THEN NULL ELSE rec_token END,
            card_pan = CASE WHEN $4 THEN NULL ELSE card_pan END,
            updated_at = NOW()
-       WHERE telegram_id = $3 AND status = 'Active' AND expires_at > NOW()
+       WHERE telegram_id = $3 AND status = 'Active' AND expires_at::date >= CURRENT_DATE
        RETURNING *`,
       [newMethod, newPlan, telegramId, clearCard],
     );
@@ -143,10 +145,11 @@ export async function changePaymentMethod(telegramId: number, newMethod: string,
     const eventCardPan = cardPan ?? sub.card_pan;
     const eventCurrency = newMethod === 'card' ? 'UAH' : 'USDT';
 
+    const eventAmount = newMethod === 'card' ? 1 : 0;
     await client.query(
-      `INSERT INTO subscription_events (subscription_id, telegram_id, event, plan, method, card_pan, currency, expires_at)
-       VALUES ($1, $2, 'method_changed', $3, $4, $5, $6, $7)`,
-      [sub.id, telegramId, newPlan, newMethod, eventCardPan, eventCurrency, sub.expires_at],
+      `INSERT INTO subscription_events (subscription_id, telegram_id, event, plan, method, card_pan, amount, currency, expires_at)
+       VALUES ($1, $2, 'method_changed', $3, $4, $5, $6, $7, $8)`,
+      [sub.id, telegramId, newPlan, newMethod, eventCardPan, eventAmount, eventCurrency, sub.expires_at],
     );
 
     await client.query('COMMIT');
@@ -168,7 +171,7 @@ export async function changeSubscriptionPlan(telegramId: number, newPlan: string
     const result = await client.query(
       `UPDATE subscriptions
        SET plan = $1, updated_at = NOW()
-       WHERE telegram_id = $2 AND status = 'Active' AND expires_at > NOW()
+       WHERE telegram_id = $2 AND status = 'Active' AND expires_at::date >= CURRENT_DATE
        RETURNING *`,
       [newPlan, telegramId],
     );
@@ -200,7 +203,7 @@ export async function changeSubscriptionPlan(telegramId: number, newPlan: string
 export async function updateSubscriptionCard(telegramId: number, recToken: string, cardPan: string | null): Promise<boolean> {
   const result = await db.query(
     `UPDATE subscriptions SET rec_token = $1, card_pan = $2, updated_at = NOW()
-     WHERE telegram_id = $3 AND status = 'Active' AND expires_at > NOW()`,
+     WHERE telegram_id = $3 AND status = 'Active' AND expires_at::date >= CURRENT_DATE`,
     [recToken, cardPan, telegramId],
   );
   return (result.rowCount ?? 0) > 0;
@@ -226,9 +229,13 @@ export async function activateSubscription(params: {
   try {
     await client.query('BEGIN');
 
+    // Use date-level check (not timestamp) to match charge job logic.
+    // Without this, a subscription expiring at 20:16 today wouldn't be found at 20:33
+    // — causing a duplicate subscription instead of extending.
     const existingResult = await client.query(
       `SELECT * FROM subscriptions
-       WHERE telegram_id = $1 AND status = 'Active' AND expires_at > NOW()
+       WHERE telegram_id = $1 AND status = 'Active' AND expires_at::date >= CURRENT_DATE
+       ORDER BY expires_at DESC
        LIMIT 1`,
       [telegramId],
     );
@@ -248,6 +255,13 @@ export async function activateSubscription(params: {
         [days, plan, method, JSON.stringify(prices), cardPan ?? null, recToken ?? null, existing.id],
       );
     } else {
+      // Expire any lingering Active subscriptions before creating new one
+      await client.query(
+        `UPDATE subscriptions SET status = 'Expired', updated_at = NOW()
+         WHERE telegram_id = $1 AND status = 'Active'`,
+        [telegramId],
+      );
+
       // Create new subscription
       result = await client.query(
         `INSERT INTO subscriptions (user_id, telegram_id, plan, method, status, prices, card_pan, rec_token, started_at, expires_at)

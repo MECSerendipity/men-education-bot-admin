@@ -15,6 +15,7 @@ interface Transaction {
   plan: string;
   status: string;
   subscription_id: number | null;
+  active_subscription_id: number | null;
   order_reference: string;
   card_pan: string | null;
   tx_hash: string | null;
@@ -189,7 +190,7 @@ export function TransactionsPage() {
                   return (
                     <tr key={tx.id} className="hover:bg-gray-50 transition-colors">
                       <td className="px-4 py-3 font-mono text-gray-400">{tx.id}</td>
-                      <td className="px-4 py-3 font-mono text-gray-400">{tx.subscription_id ?? '—'}</td>
+                      <td className="px-4 py-3 font-mono text-gray-400">{tx.subscription_id ?? tx.active_subscription_id ?? '—'}</td>
                       <td className="px-4 py-3 text-gray-700">
                         <div>{userName}</div>
                         <div className="text-xs text-gray-400 font-mono">TG_ID: {tx.telegram_id}</div>

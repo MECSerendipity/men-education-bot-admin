@@ -594,7 +594,8 @@ app.get<{
       const dataResult = await dbPool.query(
         `SELECT t.id, t.telegram_id, t.amount, t.currency, t.method, t.plan,
                 t.status, t.subscription_id, t.order_reference, t.card_pan, t.tx_hash, t.decline_reason, t.created_at,
-                u.username, u.first_name, u.last_name
+                u.username, u.first_name, u.last_name,
+                COALESCE(t.subscription_id, (SELECT s.id FROM subscriptions s WHERE s.telegram_id = t.telegram_id AND s.status = 'Active' ORDER BY s.updated_at DESC LIMIT 1)) AS active_subscription_id
          FROM transactions t
          LEFT JOIN users u ON u.telegram_id = t.telegram_id
          ${where}
@@ -969,10 +970,10 @@ app.post<{
         const result = await dbPool.query(`SELECT telegram_id FROM subscriptions WHERE status = 'Active'`);
         telegramIds = result.rows.map((r: { telegram_id: number }) => Number(r.telegram_id));
       } else if (target === 'cancelled_in_club') {
-        const result = await dbPool.query(`SELECT telegram_id FROM subscriptions WHERE status = 'Cancelled' AND expires_at > NOW()`);
+        const result = await dbPool.query(`SELECT telegram_id FROM subscriptions WHERE status = 'Cancelled' AND expires_at::date >= CURRENT_DATE`);
         telegramIds = result.rows.map((r: { telegram_id: number }) => Number(r.telegram_id));
       } else if (target === 'expired') {
-        const result = await dbPool.query(`SELECT telegram_id FROM subscriptions WHERE status IN ('Cancelled', 'Expired') AND expires_at <= NOW()`);
+        const result = await dbPool.query(`SELECT telegram_id FROM subscriptions WHERE status IN ('Cancelled', 'Expired') AND expires_at::date < CURRENT_DATE`);
         telegramIds = result.rows.map((r: { telegram_id: number }) => Number(r.telegram_id));
       } else if (target === 'never_subscribed') {
         const result = await dbPool.query(`SELECT telegram_id FROM users WHERE telegram_id NOT IN (SELECT telegram_id FROM subscriptions)`);
@@ -1173,10 +1174,10 @@ app.post<{
         const result = await dbPool.query(`SELECT telegram_id FROM subscriptions WHERE status = 'Active'`);
         telegramIds = result.rows.map((r: { telegram_id: number }) => Number(r.telegram_id));
       } else if (target === 'cancelled_in_club') {
-        const result = await dbPool.query(`SELECT telegram_id FROM subscriptions WHERE status = 'Cancelled' AND expires_at > NOW()`);
+        const result = await dbPool.query(`SELECT telegram_id FROM subscriptions WHERE status = 'Cancelled' AND expires_at::date >= CURRENT_DATE`);
         telegramIds = result.rows.map((r: { telegram_id: number }) => Number(r.telegram_id));
       } else if (target === 'expired') {
-        const result = await dbPool.query(`SELECT telegram_id FROM subscriptions WHERE status IN ('Cancelled', 'Expired') AND expires_at <= NOW()`);
+        const result = await dbPool.query(`SELECT telegram_id FROM subscriptions WHERE status IN ('Cancelled', 'Expired') AND expires_at::date < CURRENT_DATE`);
         telegramIds = result.rows.map((r: { telegram_id: number }) => Number(r.telegram_id));
       } else if (target === 'never_subscribed') {
         const result = await dbPool.query(`SELECT telegram_id FROM users WHERE telegram_id NOT IN (SELECT telegram_id FROM subscriptions)`);
@@ -1326,7 +1327,7 @@ app.post(
   '/api/texts/apply',
   { preHandler: [authenticate] },
   async (_request, reply) => {
-    const botWebhookPort = process.env.WEBHOOK_PORT ?? '3001';
+    const botWebhookPort = process.env.WAYFORPAY_WEBHOOK_PORT ?? '3002';
     try {
       const res = await fetch(`http://127.0.0.1:${botWebhookPort}/internal/reload-texts`, {
         method: 'POST',
