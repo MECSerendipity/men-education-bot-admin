@@ -1,6 +1,7 @@
 import { Telegraf } from 'telegraf';
 import { getReferralByReferredId, activateReferral, getPartnerConfig, addPartnerEarning } from '../db/partners.js';
 import { logger } from '../utils/logger.js';
+import { TEXTS } from '../texts/index.js';
 
 /**
  * Process partner commission after a successful payment.
@@ -50,7 +51,7 @@ export async function processPartnerCommission(bot: Telegraf, params: {
     const earnedAmount = Math.round(params.paymentAmount * percentage) / 100;
     if (earnedAmount <= 0) return;
 
-    await addPartnerEarning({
+    const credited = await addPartnerEarning({
       partnerId: referral.referrer_id,
       referredId: params.referredTelegramId,
       transactionId: params.transactionId,
@@ -59,6 +60,17 @@ export async function processPartnerCommission(bot: Telegraf, params: {
       currency: params.paymentCurrency,
       percentage,
     });
+
+    if (!credited) {
+      // Commission already exists for this transaction — skip notification to avoid misleading the partner.
+      logger.warn('Duplicate partner commission attempt blocked', {
+        partnerId: referral.referrer_id,
+        referredId: params.referredTelegramId,
+        transactionId: params.transactionId,
+        type,
+      });
+      return;
+    }
 
     logger.info('Partner commission processed', {
       partnerId: referral.referrer_id,
@@ -70,12 +82,13 @@ export async function processPartnerCommission(bot: Telegraf, params: {
     });
 
     // Notify partner about the earning
-    const label = type === 'earning_first' ? 'першу оплату' : 'автопродовження';
+    const template = type === 'earning_first' ? TEXTS.PARTNER_COMMISSION_FIRST : TEXTS.PARTNER_COMMISSION_RECURRING;
+    const message = template
+      .replace('{amount}', earnedAmount.toFixed(2))
+      .replace('{currency}', params.paymentCurrency)
+      .replace('{percentage}', String(percentage));
     try {
-      await bot.telegram.sendMessage(
-        referral.referrer_id,
-        `\u{1F4B0} Тобі нараховано ${earnedAmount.toFixed(2)} ${params.paymentCurrency} за ${label} реферала (${percentage}%).`,
-      );
+      await bot.telegram.sendMessage(referral.referrer_id, message);
     } catch {
       // Partner may have blocked the bot — not critical
     }

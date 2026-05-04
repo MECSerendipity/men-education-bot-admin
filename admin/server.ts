@@ -1440,7 +1440,7 @@ app.get<{
       const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
       const countResult = await dbPool.query(
-        `SELECT COUNT(*) FROM referrals r
+        `SELECT COUNT(*) FROM partner_referrals r
          LEFT JOIN users u1 ON u1.telegram_id = r.referrer_id
          LEFT JOIN users u2 ON u2.telegram_id = r.referred_id
          ${where}`,
@@ -1465,7 +1465,7 @@ app.get<{
            COUNT(*) FILTER (WHERE r.status = 'clicked') AS total_clicked,
            COUNT(*) FILTER (WHERE r.status = 'active') AS total_active,
            COUNT(*) FILTER (WHERE r.status = 'inactive') AS total_inactive
-         FROM referrals r
+         FROM partner_referrals r
          LEFT JOIN users u1 ON u1.telegram_id = r.referrer_id
          LEFT JOIN users u2 ON u2.telegram_id = r.referred_id
          ${searchWhere}`,
@@ -1482,7 +1482,7 @@ app.get<{
         `SELECT r.*,
                 u1.username AS referrer_username, u1.first_name AS referrer_first_name,
                 u2.username AS referred_username, u2.first_name AS referred_first_name
-         FROM referrals r
+         FROM partner_referrals r
          LEFT JOIN users u1 ON u1.telegram_id = r.referrer_id
          LEFT JOIN users u2 ON u2.telegram_id = r.referred_id
          ${where}
@@ -1623,7 +1623,7 @@ app.get<{
         `SELECT u.id, u.telegram_id, u.username, u.first_name, u.ref_code,
                 COALESCE(pb.balance_uah, 0) AS partner_balance_uah,
                 COALESCE(pb.balance_usdt, 0) AS partner_balance_usdt,
-                (SELECT COUNT(*) FROM referrals r WHERE r.referrer_id = u.telegram_id) AS referral_count,
+                (SELECT COUNT(*) FROM partner_referrals r WHERE r.referrer_id = u.telegram_id) AS referral_count,
                 COALESCE((SELECT SUM(amount) FROM partner_transactions pt WHERE pt.partner_id = u.telegram_id AND pt.type = 'withdrawal' AND pt.status = 'approved' AND pt.currency = 'UAH'), 0) AS withdrawn_uah,
                 COALESCE((SELECT SUM(amount) FROM partner_transactions pt WHERE pt.partner_id = u.telegram_id AND pt.type = 'withdrawal' AND pt.status = 'approved' AND pt.currency = 'USDT'), 0) AS withdrawn_usdt,
                 COALESCE((SELECT SUM(amount) FROM partner_transactions pt WHERE pt.partner_id = u.telegram_id AND pt.type LIKE 'earning_%' AND pt.status = 'completed' AND pt.currency = 'UAH'), 0) AS total_earned_uah,

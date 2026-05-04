@@ -104,15 +104,6 @@ export async function migrate() {
     ON CONFLICT (key) DO NOTHING;
   `);
 
-  // ── texts: editable texts (admin panel) ──
-  await db.query(`
-    CREATE TABLE IF NOT EXISTS texts (
-      key             VARCHAR(255) PRIMARY KEY,
-      value           TEXT NOT NULL,
-      updated_at      TIMESTAMPTZ DEFAULT NOW()
-    );
-  `);
-
   // ── subscription_events: audit log of subscription changes ──
   await db.query(`
     CREATE TABLE IF NOT EXISTS subscription_events (
@@ -161,9 +152,9 @@ export async function migrate() {
   // ── users: add ref_code for partner referral links ──
   await db.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ref_code VARCHAR(20) UNIQUE`);
 
-  // ── referrals: who referred whom ──
+  // ── partner_referrals: who referred whom ──
   await db.query(`
-    CREATE TABLE IF NOT EXISTS referrals (
+    CREATE TABLE IF NOT EXISTS partner_referrals (
       id              SERIAL PRIMARY KEY,
       referrer_id     BIGINT NOT NULL,
       referred_id     BIGINT NOT NULL UNIQUE,
@@ -244,15 +235,18 @@ export async function migrate() {
   await db.query(`CREATE INDEX IF NOT EXISTS idx_subscription_events_subscription_id ON subscription_events (subscription_id)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_invite_links_telegram_id ON invite_links (telegram_id)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_partner_accounts_telegram_id ON partner_accounts (telegram_id)`);
-  await db.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referrer_id ON referrals (referrer_id)`);
-  await db.query(`CREATE INDEX IF NOT EXISTS idx_referrals_referred_id ON referrals (referred_id)`);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_partner_referrals_referrer_id ON partner_referrals (referrer_id)`);
+  await db.query(`CREATE INDEX IF NOT EXISTS idx_partner_referrals_referred_id ON partner_referrals (referred_id)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_partner_transactions_partner_id ON partner_transactions (partner_id)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_partner_transactions_created_at ON partner_transactions (created_at DESC)`);
+  // Prevent double-credit: one earning row per (transaction_id, type).
+  // Withdrawals (transaction_id IS NULL) are excluded — NULLs are distinct in unique indexes.
+  await db.query(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_partner_earning_per_tx ON partner_transactions (transaction_id, type) WHERE type LIKE 'earning_%'`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_system_logs_created_at ON system_logs (created_at DESC)`);
   await db.query(`CREATE INDEX IF NOT EXISTS idx_system_logs_level ON system_logs (level)`);
 
-  // Backfill: rename churned → inactive in referrals (safe for both old and new databases)
-  await db.query(`UPDATE referrals SET status = 'inactive' WHERE status = 'churned'`);
+  // Backfill: rename churned → inactive in partner_referrals (safe for both old and new databases)
+  await db.query(`UPDATE partner_referrals SET status = 'inactive' WHERE status = 'churned'`);
 
   logger.info('Database migrated');
 }

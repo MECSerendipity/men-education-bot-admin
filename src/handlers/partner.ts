@@ -78,7 +78,7 @@ export function registerPartnerHandler(bot: Telegraf) {
     const username = await getBotUsername(bot);
     const link = `https://t.me/${username}?start=${refCode}`;
 
-    const shareText = encodeURIComponent(`${TEXTS.SHARE_TEXT}\n${link}`);
+    const shareText = encodeURIComponent(TEXTS.SHARE__REFFERALS_TEXT);
     const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${shareText}`;
 
     await ctx.editMessageText(
@@ -180,7 +180,7 @@ export function registerPartnerHandler(bot: Telegraf) {
     const telegramId = ctx.from.id;
 
     const day = new Date().getDate();
-    if (day < 10 || day > 20) {
+    if (day < 3 || day > 20) {
       await ctx.editMessageText(
         TEXTS.WITHDRAW_DATE_RESTRICTION,
         {
@@ -228,7 +228,7 @@ export function registerPartnerHandler(bot: Telegraf) {
     const telegramId = ctx.from.id;
 
     const day = new Date().getDate();
-    if (day < 10 || day > 20) {
+    if (day < 3 || day > 20) {
       await ctx.editMessageText(
         TEXTS.WITHDRAW_DATE_RESTRICTION,
         {
@@ -472,7 +472,7 @@ export function registerPartnerHandler(bot: Telegraf) {
       return `@${start}**${end}`;
     };
 
-    const header = 'Username,"Clicked (дата переходу за реферальним посиланням)","Active (true - має активну підписку та приносить дохід; false - підписка неактивна)","Inactive (true - підписка закінчилась, дохід не нараховується; false - ще не оформлював підписку)"';
+    const header = 'Username,"Clicked (дата переходу за реферальним посиланням)","Active (true - має активну підписку та приносить дохід; false - підписка неактивна)","Inactive (true - підписка закінчилась, дохід не нараховується; false - ще не скасовував підписку)"';
     const rows = referrals.map(r => {
       const username = maskUsername(r.username);
       const clicked = formatCsvDate(r.created_at);

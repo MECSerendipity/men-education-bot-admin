@@ -80,7 +80,7 @@ export async function findReferrerByCode(refCode: string): Promise<number | null
 export async function createReferral(referrerId: number, referredId: number): Promise<Referral | null> {
   try {
     const result = await db.query(
-      `INSERT INTO referrals (referrer_id, referred_id, status)
+      `INSERT INTO partner_referrals (referrer_id, referred_id, status)
        VALUES ($1, $2, 'clicked')
        ON CONFLICT (referred_id) DO NOTHING
        RETURNING *`,
@@ -95,7 +95,7 @@ export async function createReferral(referrerId: number, referredId: number): Pr
 /** Get referral by referred user's telegram_id */
 export async function getReferralByReferredId(referredId: number): Promise<Referral | null> {
   const result = await db.query(
-    'SELECT * FROM referrals WHERE referred_id = $1',
+    'SELECT * FROM partner_referrals WHERE referred_id = $1',
     [referredId],
   );
   return result.rows[0] ?? null;
@@ -104,7 +104,7 @@ export async function getReferralByReferredId(referredId: number): Promise<Refer
 /** Activate a referral (first payment by referred user) */
 export async function activateReferral(referredId: number): Promise<void> {
   await db.query(
-    `UPDATE referrals SET status = 'active', activated_at = NOW()
+    `UPDATE partner_referrals SET status = 'active', activated_at = NOW()
      WHERE referred_id = $1 AND status = 'clicked'`,
     [referredId],
   );
@@ -113,7 +113,7 @@ export async function activateReferral(referredId: number): Promise<void> {
 /** Mark referral as inactive (referred user was kicked) — breaks commission chain forever */
 export async function deactivateReferral(referredId: number): Promise<void> {
   await db.query(
-    `UPDATE referrals SET status = 'inactive', inactive_at = NOW()
+    `UPDATE partner_referrals SET status = 'inactive', inactive_at = NOW()
      WHERE referred_id = $1 AND status IN ('active', 'clicked')`,
     [referredId],
   );
@@ -135,7 +135,7 @@ export async function getPartnerStats(referrerId: number): Promise<{
         COUNT(*) AS clicks,
         COUNT(*) FILTER (WHERE status = 'active') AS active,
         COUNT(*) FILTER (WHERE status = 'inactive') AS inactive
-       FROM referrals WHERE referrer_id = $1`,
+       FROM partner_referrals WHERE referrer_id = $1`,
       [referrerId],
     ),
     db.query(
@@ -187,7 +187,7 @@ export async function getPartnerBalance(telegramId: number): Promise<{ uah: numb
   };
 }
 
-/** Add earnings to partner balance (atomic) */
+/** Add earnings to partner balance (atomic). Returns false if commission was already credited for this transaction. */
 export async function addPartnerEarning(params: {
   partnerId: number;
   referredId: number;
@@ -196,17 +196,26 @@ export async function addPartnerEarning(params: {
   amount: number;
   currency: string;
   percentage: number;
-}): Promise<void> {
+}): Promise<boolean> {
   const client = await db.pool.connect();
   try {
     await client.query('BEGIN');
 
-    // Record the earning
-    await client.query(
+    // Record the earning — UNIQUE (transaction_id, type) prevents double-credit.
+    // ON CONFLICT DO NOTHING + RETURNING id lets us detect duplicates and skip the balance update.
+    const insertResult = await client.query(
       `INSERT INTO partner_transactions (partner_id, referred_id, transaction_id, type, amount, currency, percentage, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'completed')`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'completed')
+       ON CONFLICT (transaction_id, type) WHERE type LIKE 'earning_%' DO NOTHING
+       RETURNING id`,
       [params.partnerId, params.referredId, params.transactionId, params.type, params.amount, params.currency, params.percentage],
     );
+
+    if (insertResult.rows.length === 0) {
+      // Duplicate commission — already credited for this transaction. Don't touch balance.
+      await client.query('ROLLBACK');
+      return false;
+    }
 
     // Ensure balance row exists and update it
     await ensurePartnerBalance(client, params.partnerId);
@@ -217,6 +226,7 @@ export async function addPartnerEarning(params: {
     );
 
     await client.query('COMMIT');
+    return true;
   } catch (err) {
     await client.query('ROLLBACK');
     throw err;
@@ -345,7 +355,7 @@ export async function updatePartnerConfig(key: string, value: string): Promise<v
 export async function getPartnerReferrals(referrerId: number): Promise<(Referral & { username: string | null; first_name: string | null })[]> {
   const result = await db.query(
     `SELECT r.*, u.username, u.first_name
-     FROM referrals r
+     FROM partner_referrals r
      LEFT JOIN users u ON u.telegram_id = r.referred_id
      WHERE r.referrer_id = $1
      ORDER BY r.created_at DESC`,
