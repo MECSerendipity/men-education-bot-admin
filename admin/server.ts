@@ -933,9 +933,64 @@ interface BroadcastJob {
   sent: number;
   failed: number;
   done: boolean;
+  cancelled: boolean;
   errors: { telegramId: number; error: string }[];
 }
 const broadcastJobs = new Map<string, BroadcastJob>();
+
+/** Returns true if there is a broadcast job currently running (not done). */
+function hasActiveBroadcast(): boolean {
+  for (const job of broadcastJobs.values()) {
+    if (!job.done) return true;
+  }
+  return false;
+}
+
+type BroadcastTarget = 'all' | 'subscribers' | 'cancelled_in_club' | 'expired' | 'never_subscribed' | 'specific';
+
+/**
+ * Resolve a broadcast target into a list of unique telegram_ids.
+ * Targets are mutually exclusive — a user falls into exactly one segment:
+ *   - subscribers           → has any Active subscription
+ *   - cancelled_in_club     → Cancelled with expires_at in future, AND no Active sub anywhere
+ *   - expired               → Cancelled/Expired with expires_at in past, AND not Active, AND not Cancelled-in-club
+ *   - never_subscribed      → in users table but no row in subscriptions
+ *   - all                   → every user from the users table
+ *   - specific              → admin-supplied list of telegram_ids
+ *
+ * Returns either { telegramIds } on success or { error } when the input is invalid.
+ */
+async function resolveTelegramIdsForTarget(target: BroadcastTarget, specificIds?: string[]): Promise<{ telegramIds: number[] } | { error: string }> {
+  if (target === 'specific') {
+    if (!specificIds?.length) return { error: 'No valid Telegram IDs provided' };
+    const ids = specificIds.map(id => Number(id)).filter(id => id > 0);
+    if (ids.length === 0) return { error: 'No valid Telegram IDs provided' };
+    return { telegramIds: ids };
+  }
+
+  let sql: string;
+  if (target === 'subscribers') {
+    sql = `SELECT DISTINCT telegram_id FROM subscriptions WHERE status = 'Active'`;
+  } else if (target === 'cancelled_in_club') {
+    sql = `SELECT DISTINCT telegram_id FROM subscriptions
+           WHERE status = 'Cancelled' AND expires_at::date >= CURRENT_DATE
+             AND telegram_id NOT IN (SELECT telegram_id FROM subscriptions WHERE status = 'Active')`;
+  } else if (target === 'expired') {
+    sql = `SELECT DISTINCT telegram_id FROM subscriptions
+           WHERE status IN ('Cancelled', 'Expired') AND expires_at::date < CURRENT_DATE
+             AND telegram_id NOT IN (
+               SELECT telegram_id FROM subscriptions
+               WHERE status = 'Active' OR (status = 'Cancelled' AND expires_at::date >= CURRENT_DATE)
+             )`;
+  } else if (target === 'never_subscribed') {
+    sql = `SELECT telegram_id FROM users WHERE telegram_id NOT IN (SELECT telegram_id FROM subscriptions)`;
+  } else {
+    sql = `SELECT telegram_id FROM users`;
+  }
+
+  const result = await dbPool.query(sql);
+  return { telegramIds: result.rows.map((r: { telegram_id: number }) => Number(r.telegram_id)) };
+}
 
 /** POST /api/broadcast/video-note — start video note broadcast */
 app.post<{
@@ -959,29 +1014,15 @@ app.post<{
         return reply.status(500).send({ error: 'BOT_TOKEN not configured' });
       }
 
-      // Build user list based on target
-      let telegramIds: number[] = [];
-      if (target === 'specific' && specificIds?.length) {
-        telegramIds = specificIds.map(id => Number(id)).filter(id => id > 0);
-        if (telegramIds.length === 0) {
-          return reply.status(400).send({ error: 'No valid Telegram IDs provided' });
-        }
-      } else if (target === 'subscribers') {
-        const result = await dbPool.query(`SELECT telegram_id FROM subscriptions WHERE status = 'Active'`);
-        telegramIds = result.rows.map((r: { telegram_id: number }) => Number(r.telegram_id));
-      } else if (target === 'cancelled_in_club') {
-        const result = await dbPool.query(`SELECT telegram_id FROM subscriptions WHERE status = 'Cancelled' AND expires_at::date >= CURRENT_DATE`);
-        telegramIds = result.rows.map((r: { telegram_id: number }) => Number(r.telegram_id));
-      } else if (target === 'expired') {
-        const result = await dbPool.query(`SELECT telegram_id FROM subscriptions WHERE status IN ('Cancelled', 'Expired') AND expires_at::date < CURRENT_DATE`);
-        telegramIds = result.rows.map((r: { telegram_id: number }) => Number(r.telegram_id));
-      } else if (target === 'never_subscribed') {
-        const result = await dbPool.query(`SELECT telegram_id FROM users WHERE telegram_id NOT IN (SELECT telegram_id FROM subscriptions)`);
-        telegramIds = result.rows.map((r: { telegram_id: number }) => Number(r.telegram_id));
-      } else {
-        const result = await dbPool.query(`SELECT telegram_id FROM users`);
-        telegramIds = result.rows.map((r: { telegram_id: number }) => Number(r.telegram_id));
+      if (hasActiveBroadcast()) {
+        return reply.status(409).send({ error: 'Інша розсилка вже виконується. Зачекай її завершення або скасуй.' });
       }
+
+      const resolved = await resolveTelegramIdsForTarget(target, specificIds);
+      if ('error' in resolved) {
+        return reply.status(400).send({ error: resolved.error });
+      }
+      const telegramIds = resolved.telegramIds;
 
       if (telegramIds.length === 0) {
         return { success: true, sent: 0, total: 0 };
@@ -989,12 +1030,13 @@ app.post<{
 
       // Create job and start in background
       const jobId = `vn_${Date.now()}`;
-      const job: BroadcastJob = { total: telegramIds.length, sent: 0, failed: 0, done: false, errors: [] };
+      const job: BroadcastJob = { total: telegramIds.length, sent: 0, failed: 0, done: false, cancelled: false, errors: [] };
       broadcastJobs.set(jobId, job);
 
       // Run in background (don't await)
       (async () => {
         for (const tgId of telegramIds) {
+          if (job.cancelled) break;
           try {
             const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendVideoNote`, {
               method: 'POST',
@@ -1037,7 +1079,7 @@ app.get<{ Params: { jobId: string } }>(
     if (!job) {
       return reply.status(404).send({ error: 'Job not found' });
     }
-    return { total: job.total, sent: job.sent, failed: job.failed, done: job.done, errors: job.errors };
+    return { total: job.total, sent: job.sent, failed: job.failed, done: job.done, cancelled: job.cancelled, errors: job.errors };
   }
 );
 
@@ -1048,7 +1090,24 @@ app.get<{ Params: { jobId: string } }>(
   async (request, reply) => {
     const job = broadcastJobs.get(request.params.jobId);
     if (!job) return reply.status(404).send({ error: 'Job not found' });
-    return { total: job.total, sent: job.sent, failed: job.failed, done: job.done, errors: job.errors };
+    return { total: job.total, sent: job.sent, failed: job.failed, done: job.done, cancelled: job.cancelled, errors: job.errors };
+  }
+);
+
+/** POST /api/broadcast/cancel/:jobId — cancel an in-progress broadcast */
+app.post<{ Params: { jobId: string } }>(
+  '/api/broadcast/cancel/:jobId',
+  { preHandler: [authenticate] },
+  async (request, reply) => {
+    const job = broadcastJobs.get(request.params.jobId);
+    if (!job) {
+      return reply.status(404).send({ error: 'Job not found' });
+    }
+    if (job.done) {
+      return reply.status(400).send({ error: 'Job already finished' });
+    }
+    job.cancelled = true;
+    return { success: true };
   }
 );
 
@@ -1163,29 +1222,15 @@ app.post<{
         return reply.status(500).send({ error: 'BOT_TOKEN not configured' });
       }
 
-      // Build user list
-      let telegramIds: number[] = [];
-      if (target === 'specific' && specificIds?.length) {
-        telegramIds = specificIds.map(id => Number(id)).filter(id => id > 0);
-        if (telegramIds.length === 0) {
-          return reply.status(400).send({ error: 'No valid Telegram IDs provided' });
-        }
-      } else if (target === 'subscribers') {
-        const result = await dbPool.query(`SELECT telegram_id FROM subscriptions WHERE status = 'Active'`);
-        telegramIds = result.rows.map((r: { telegram_id: number }) => Number(r.telegram_id));
-      } else if (target === 'cancelled_in_club') {
-        const result = await dbPool.query(`SELECT telegram_id FROM subscriptions WHERE status = 'Cancelled' AND expires_at::date >= CURRENT_DATE`);
-        telegramIds = result.rows.map((r: { telegram_id: number }) => Number(r.telegram_id));
-      } else if (target === 'expired') {
-        const result = await dbPool.query(`SELECT telegram_id FROM subscriptions WHERE status IN ('Cancelled', 'Expired') AND expires_at::date < CURRENT_DATE`);
-        telegramIds = result.rows.map((r: { telegram_id: number }) => Number(r.telegram_id));
-      } else if (target === 'never_subscribed') {
-        const result = await dbPool.query(`SELECT telegram_id FROM users WHERE telegram_id NOT IN (SELECT telegram_id FROM subscriptions)`);
-        telegramIds = result.rows.map((r: { telegram_id: number }) => Number(r.telegram_id));
-      } else {
-        const result = await dbPool.query(`SELECT telegram_id FROM users`);
-        telegramIds = result.rows.map((r: { telegram_id: number }) => Number(r.telegram_id));
+      if (hasActiveBroadcast()) {
+        return reply.status(409).send({ error: 'Інша розсилка вже виконується. Зачекай її завершення або скасуй.' });
       }
+
+      const resolved = await resolveTelegramIdsForTarget(target, specificIds);
+      if ('error' in resolved) {
+        return reply.status(400).send({ error: resolved.error });
+      }
+      const telegramIds = resolved.telegramIds;
 
       if (telegramIds.length === 0) {
         return { success: true, sent: 0, total: 0 };
@@ -1209,11 +1254,12 @@ app.post<{
 
       // Start background job
       const jobId = `msg_${Date.now()}`;
-      const job: BroadcastJob = { total: telegramIds.length, sent: 0, failed: 0, done: false, errors: [] };
+      const job: BroadcastJob = { total: telegramIds.length, sent: 0, failed: 0, done: false, cancelled: false, errors: [] };
       broadcastJobs.set(jobId, job);
 
       (async () => {
         for (const tgId of telegramIds) {
+          if (job.cancelled) break;
           try {
             let apiMethod = 'sendMessage';
             const body: Record<string, unknown> = { chat_id: tgId, parse_mode: 'HTML' };

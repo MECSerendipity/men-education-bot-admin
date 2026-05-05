@@ -576,6 +576,7 @@ interface BroadcastProgress {
   sent: number;
   failed: number;
   done: boolean;
+  cancelled: boolean;
   errors: { telegramId: number; error: string }[];
 }
 
@@ -590,7 +591,7 @@ const TARGET_OPTIONS: { key: BroadcastTarget; label: string; tooltip: string }[]
 
 /* ---------- Target Selector (shared) ---------- */
 
-function TargetSelector({ target, onTargetChange, selectedUsers, onSelectedUsersChange, sending, onSend, canSend, progress, result }: {
+function TargetSelector({ target, onTargetChange, selectedUsers, onSelectedUsersChange, sending, onSend, canSend, progress, result, jobId, onCancel }: {
   target: BroadcastTarget;
   onTargetChange: (t: BroadcastTarget) => void;
   selectedUsers: UserOption[];
@@ -600,6 +601,8 @@ function TargetSelector({ target, onTargetChange, selectedUsers, onSelectedUsers
   canSend: boolean;
   progress: BroadcastProgress | null;
   result: { ok: boolean; message: string } | null;
+  jobId: string | null;
+  onCancel: () => void;
 }) {
   const [userSearch, setUserSearch] = useState('');
   const [userOptions, setUserOptions] = useState<UserOption[]>([]);
@@ -739,6 +742,15 @@ function TargetSelector({ target, onTargetChange, selectedUsers, onSelectedUsers
               <div className="bg-blue-600 h-2 rounded-full transition-all"
                 style={{ width: `${Math.round(((progress.sent + progress.failed) / progress.total) * 100)}%` }} />
             </div>
+            {jobId && !progress.cancelled && (
+              <button onClick={onCancel}
+                className="w-full px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded-md hover:bg-red-100 cursor-pointer transition-colors">
+                Скасувати розсилку
+              </button>
+            )}
+            {progress.cancelled && (
+              <p className="text-xs text-amber-600 text-center">Скасовується... зачекай поточну відправку</p>
+            )}
           </div>
         )}
 
@@ -788,8 +800,16 @@ function BotBroadcastPage({ onBack }: { onBack: () => void }) {
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [progress, setProgress] = useState<BroadcastProgress | null>(null);
+  const [jobId, setJobId] = useState<string | null>(null);
   const { headers } = useAuth();
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  async function handleCancel() {
+    if (!jobId) return;
+    try {
+      await fetch(`/api/broadcast/cancel/${jobId}`, { method: 'POST', headers });
+    } catch { /* ignore */ }
+  }
 
   useEffect(() => {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
@@ -821,7 +841,7 @@ function BotBroadcastPage({ onBack }: { onBack: () => void }) {
           setSending(false);
           setResult({
             ok: true,
-            message: `Розсилка завершена: ${data.sent} надіслано${data.failed ? `, ${data.failed} помилок` : ''} / ${data.total} всього`,
+            message: `${data.cancelled ? 'Розсилку скасовано' : 'Розсилка завершена'}: ${data.sent} надіслано${data.failed ? `, ${data.failed} помилок` : ''} / ${data.total} всього`,
           });
         }
       } catch { /* ignore */ }
@@ -853,7 +873,8 @@ function BotBroadcastPage({ onBack }: { onBack: () => void }) {
         setResult({ ok: false, message: data.error ?? 'Failed to send' });
         setSending(false);
       } else if (data.jobId) {
-        setProgress({ total: data.total, sent: 0, failed: 0, done: false, errors: [] });
+        setJobId(data.jobId);
+        setProgress({ total: data.total, sent: 0, failed: 0, done: false, cancelled: false, errors: [] });
         startPolling(data.jobId);
       } else {
         setResult({ ok: true, message: 'Відправлено!' });
@@ -1003,6 +1024,7 @@ function BotBroadcastPage({ onBack }: { onBack: () => void }) {
           selectedUsers={selectedUsers} onSelectedUsersChange={setSelectedUsers}
           sending={sending} onSend={handleSend} canSend={canSend}
           progress={progress} result={result}
+          jobId={jobId} onCancel={handleCancel}
         />
 
       </div>
@@ -1019,8 +1041,16 @@ function VideoNotePage({ onBack }: { onBack: () => void }) {
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [progress, setProgress] = useState<BroadcastProgress | null>(null);
+  const [jobId, setJobId] = useState<string | null>(null);
   const { headers } = useAuth();
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  async function handleCancel() {
+    if (!jobId) return;
+    try {
+      await fetch(`/api/broadcast/cancel/${jobId}`, { method: 'POST', headers });
+    } catch { /* ignore */ }
+  }
 
   useEffect(() => {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
@@ -1040,7 +1070,7 @@ function VideoNotePage({ onBack }: { onBack: () => void }) {
           setSending(false);
           setResult({
             ok: true,
-            message: `Розсилка завершена: ${data.sent} надіслано${data.failed ? `, ${data.failed} помилок` : ''} / ${data.total} всього`,
+            message: `${data.cancelled ? 'Розсилку скасовано' : 'Розсилка завершена'}: ${data.sent} надіслано${data.failed ? `, ${data.failed} помилок` : ''} / ${data.total} всього`,
           });
         }
       } catch { /* ignore polling errors */ }
@@ -1072,7 +1102,8 @@ function VideoNotePage({ onBack }: { onBack: () => void }) {
         setSending(false);
       } else if (data.jobId) {
         // Background job started — poll for progress
-        setProgress({ total: data.total, sent: 0, failed: 0, done: false, errors: [] });
+        setJobId(data.jobId);
+        setProgress({ total: data.total, sent: 0, failed: 0, done: false, cancelled: false, errors: [] });
         startPolling(data.jobId);
       } else {
         // Instant send (single chat)
@@ -1135,6 +1166,7 @@ function VideoNotePage({ onBack }: { onBack: () => void }) {
           selectedUsers={selectedUsers} onSelectedUsersChange={setSelectedUsers}
           sending={sending} onSend={handleSend} canSend={canSend}
           progress={progress} result={result}
+          jobId={jobId} onCancel={handleCancel}
         />
       </div>
     </div>
